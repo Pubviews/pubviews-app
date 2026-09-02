@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gerarNarracao } from "@/lib/elevenlabs";
-import { gerarImagem } from "@/lib/gemini";
+import { gerarImagem, sugerirTermosDeBusca } from "@/lib/gemini";
 import { buscarVideoStock, baixarVideo } from "@/lib/pexels";
 import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida } from "@/lib/video";
 import { promises as fs } from "fs";
@@ -29,10 +29,24 @@ export async function POST(req: NextRequest) {
       const imagemBuffer = Buffer.from(imagem.base64, "base64");
       await montarVideoComImagem({ audioBuffer, imagemBuffer, textoOverlay, saidaPath });
     } else {
-      const stock = await buscarVideoStock(descricaoVisual);
+      // O Pexels indexa o catálogo majoritariamente em inglês — buscar com a
+      // descrição em português (ex: "curso de empilhadeira") costuma trazer
+      // resultados aleatórios/sem relação. Por isso a descrição passa antes
+      // pelo Gemini, que sugere palavras-chave em inglês pra busca.
+      let termoBusca = descricaoVisual;
+      try {
+        const sugerido = await sugerirTermosDeBusca(descricaoVisual);
+        if (sugerido) termoBusca = sugerido;
+      } catch {
+        // se a sugestão falhar, tenta a busca com a descrição original mesmo
+      }
+
+      const stock = await buscarVideoStock(termoBusca);
       if (!stock) {
         return NextResponse.json(
-          { error: `Nenhum vídeo encontrado no Pexels para: "${descricaoVisual}". Tente outra descrição.` },
+          {
+            error: `Nenhum vídeo encontrado no Pexels para: "${termoBusca}". Tente outra descrição.`,
+          },
           { status: 404 }
         );
       }
