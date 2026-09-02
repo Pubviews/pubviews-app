@@ -1,7 +1,7 @@
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import ffprobeInstaller from "@ffprobe-installer/ffprobe";
-import { createCanvas, GlobalFonts } from "@napi-rs/canvas";
+import { createCanvas, GlobalFonts, loadImage } from "@napi-rs/canvas";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
@@ -35,12 +35,133 @@ async function getAudioDuration(audioPath: string): Promise<number> {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Cor do botão de CTA: em vez de uma cor fixa, o botão usa uma cor de
+// DESTAQUE (de uma paleta de cores clássicas de alta conversão) escolhida
+// automaticamente pelo maior contraste contra a região do vídeo/imagem onde
+// ele será sobreposto — assim ele sempre "salta aos olhos" em vez de se
+// misturar com o fundo do criativo.
+// ---------------------------------------------------------------------------
+
+type CorRgb = [number, number, number];
+
+interface OpcaoCorBotao {
+  hex: string;
+  bg: CorRgb;
+  texto: string;
+}
+
+// Só cores vívidas de alta conversão entram na disputa por contraste — preto
+// e branco puros ficam de fora de propósito: eles "vencem" o cálculo de
+// contraste WCAG contra quase qualquer fundo de foto (por serem os extremos
+// de luminância), o que faria o botão voltar a ser sempre preto/branco e
+// perder a variação que o objetivo aqui é justamente ter.
+const PALETA_CTA: OpcaoCorBotao[] = [
+  { hex: "#ff6b00", bg: [255, 107, 0], texto: "#ffffff" }, // laranja
+  { hex: "#00c853", bg: [0, 200, 83], texto: "#ffffff" }, // verde
+  { hex: "#ffd600", bg: [255, 214, 0], texto: "#111111" }, // amarelo
+  { hex: "#e53935", bg: [229, 57, 53], texto: "#ffffff" }, // vermelho
+  { hex: "#2979ff", bg: [41, 121, 255], texto: "#ffffff" }, // azul
+  { hex: "#7c4dff", bg: [124, 77, 255], texto: "#ffffff" }, // roxo
+  { hex: "#ff4081", bg: [255, 64, 129], texto: "#ffffff" }, // rosa
+];
+
+// Usada apenas quando a amostragem de cor falha (ex: imagem corrompida) —
+// nunca entra na disputa de contraste normal.
+const COR_FALLBACK: OpcaoCorBotao = { hex: "#111111", bg: [17, 17, 17], texto: "#ffffff" };
+
+function luminanciaRelativa([r, g, b]: CorRgb): number {
+  const canal = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * canal(r) + 0.7152 * canal(g) + 0.0722 * canal(b);
+}
+
+function razaoContraste(a: CorRgb, b: CorRgb): number {
+  const la = luminanciaRelativa(a);
+  const lb = luminanciaRelativa(b);
+  const [maior, menor] = la > lb ? [la, lb] : [lb, la];
+  return (maior + 0.05) / (menor + 0.05);
+}
+
 /**
- * Desenha um botão de CTA (fundo escuro, cantos arredondados, texto branco em negrito)
- * como um PNG com transparência, para sobrepor no vídeo — visual de botão de verdade,
- * não uma barra de texto com fundo retangular.
+ * Calcula a cor média de uma imagem/frame na região onde o botão de CTA vai
+ * ficar sobreposto (centro, próximo à base), reduzindo-a a uma amostra
+ * pequena para o cálculo ser rápido.
  */
-function renderBotaoPng(texto: string): Buffer {
+async function corMediaRegiaoDoBotao(bufferImagem: Buffer): Promise<CorRgb> {
+  const img = await loadImage(bufferImagem);
+  const sx = img.width * 0.2;
+  const sy = img.height * 0.68;
+  const sw = img.width * 0.6;
+  const sh = img.height * 0.28;
+
+  const amostra = 32;
+  const canvas = createCanvas(amostra, amostra);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, sx, sy, sw, sh, 0, 0, amostra, amostra);
+  const { data } = ctx.getImageData(0, 0, amostra, amostra);
+
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let n = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    r += data[i];
+    g += data[i + 1];
+    b += data[i + 2];
+    n += 1;
+  }
+  return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+}
+
+function escolherCorDeMaiorContraste(corDeFundo: CorRgb): OpcaoCorBotao {
+  let melhor = PALETA_CTA[0];
+  let melhorContraste = -1;
+  for (const opcao of PALETA_CTA) {
+    const contraste = razaoContraste(opcao.bg, corDeFundo);
+    if (contraste > melhorContraste) {
+      melhorContraste = contraste;
+      melhor = opcao;
+    }
+  }
+  return melhor;
+}
+
+/**
+ * Extrai um frame (meio do vídeo) de um clipe, para servir de amostra de cor
+ * — assim o botão também se adapta a criativos em vídeo, não só imagem.
+ */
+async function extrairFrameDoVideo(vidPath: string): Promise<Buffer | null> {
+  const framePath = tmpFile("png");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(vidPath)
+        .on("end", () => resolve())
+        .on("error", (err) => reject(err))
+        .screenshots({
+          timestamps: ["50%"],
+          filename: path.basename(framePath),
+          folder: path.dirname(framePath),
+        });
+    });
+    const buf = await fs.readFile(framePath);
+    return buf;
+  } catch {
+    return null;
+  } finally {
+    await fs.unlink(framePath).catch(() => {});
+  }
+}
+
+/**
+ * Desenha um botão de CTA (cantos arredondados, texto em negrito) como um
+ * PNG com transparência, para sobrepor no vídeo — visual de botão de
+ * verdade, com a cor escolhida automaticamente para contrastar com o
+ * criativo em vez de uma cor fixa.
+ */
+function renderBotaoPng(texto: string, corFundo: string, corTexto: string): Buffer {
   garantirFonteRegistrada();
 
   const fontSize = 46;
@@ -58,7 +179,7 @@ function renderBotaoPng(texto: string): Buffer {
   const canvas = createCanvas(largura, altura);
   const ctx = canvas.getContext("2d");
 
-  ctx.fillStyle = "#111111";
+  ctx.fillStyle = corFundo;
   ctx.beginPath();
   ctx.moveTo(raio, 0);
   ctx.lineTo(largura - raio, 0);
@@ -72,7 +193,7 @@ function renderBotaoPng(texto: string): Buffer {
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = corTexto;
   ctx.font = `bold ${fontSize}px "${FONT_FAMILY}"`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -87,10 +208,29 @@ interface MontarVideoOpts {
   saidaPath: string;
 }
 
-async function prepararBotao(textoOverlay: string | undefined): Promise<string | null> {
+/**
+ * Prepara o PNG do botão de CTA, escolhendo a cor de maior contraste contra
+ * uma amostra do criativo (imagem estática ou frame do vídeo). Se a amostra
+ * não estiver disponível por algum motivo, cai no preto como antes.
+ */
+async function prepararBotao(
+  textoOverlay: string | undefined,
+  amostraParaCor: Buffer | null
+): Promise<string | null> {
   if (!textoOverlay) return null;
+
+  let corEscolhida = COR_FALLBACK;
+  if (amostraParaCor) {
+    try {
+      const corDeFundo = await corMediaRegiaoDoBotao(amostraParaCor);
+      corEscolhida = escolherCorDeMaiorContraste(corDeFundo);
+    } catch {
+      // mantém o fallback preto se a amostragem falhar
+    }
+  }
+
   const botaoPath = tmpFile("png");
-  await fs.writeFile(botaoPath, renderBotaoPng(textoOverlay));
+  await fs.writeFile(botaoPath, renderBotaoPng(textoOverlay, corEscolhida.hex, corEscolhida.texto));
   return botaoPath;
 }
 
@@ -105,7 +245,7 @@ export async function montarVideoComImagem(
   const audioPath = tmpFile("mp3");
   await fs.writeFile(imgPath, opts.imagemBuffer);
   await fs.writeFile(audioPath, opts.audioBuffer);
-  const botaoPath = await prepararBotao(opts.textoOverlay);
+  const botaoPath = await prepararBotao(opts.textoOverlay, opts.imagemBuffer);
 
   const duration = await getAudioDuration(audioPath);
   const fps = 30;
@@ -158,7 +298,9 @@ export async function montarVideoComVideo(
   const audioPath = tmpFile("mp3");
   await fs.writeFile(vidPath, opts.videoBuffer);
   await fs.writeFile(audioPath, opts.audioBuffer);
-  const botaoPath = await prepararBotao(opts.textoOverlay);
+
+  const frameParaCor = await extrairFrameDoVideo(vidPath);
+  const botaoPath = await prepararBotao(opts.textoOverlay, frameParaCor);
 
   const duration = await getAudioDuration(audioPath);
 
