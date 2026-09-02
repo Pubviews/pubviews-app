@@ -18,14 +18,17 @@ export async function POST(req: NextRequest) {
     const descricaoVisual: string = body.descricaoVisual || texto;
     const textoOverlay: string | undefined = body.textoOverlay || undefined;
     const voiceId: string | undefined = body.voiceId || undefined;
-    const videoOriginalBase64: string | undefined = body.videoOriginalBase64 || undefined;
+    // URL do Vercel Blob (não os bytes direto) — o upload já aconteceu do
+    // navegador pro Blob, então aqui só busca o arquivo, sem esbarrar no
+    // limite de tamanho de requisição das Vercel Functions (~4.5MB).
+    const videoOriginalUrl: string | undefined = body.videoOriginalUrl || undefined;
 
     if (!texto) {
       return NextResponse.json({ error: "Informe o texto da narração (texto)." }, { status: 400 });
     }
-    if (formato === "video_original" && !videoOriginalBase64) {
+    if (formato === "video_original" && !videoOriginalUrl) {
       return NextResponse.json(
-        { error: "Formato 'video_original' escolhido, mas nenhum vídeo original foi enviado (videoOriginalBase64)." },
+        { error: "Formato 'video_original' escolhido, mas nenhum vídeo original foi enviado (videoOriginalUrl)." },
         { status: 400 }
       );
     }
@@ -40,7 +43,11 @@ export async function POST(req: NextRequest) {
       // Reaproveita o vídeo original enviado pelo usuário como visual — a
       // narração e o CTA são os novos, a cena continua sendo a do criativo
       // vencedor de verdade (não busca nada no Pexels nem gera imagem).
-      const videoBuffer = Buffer.from(videoOriginalBase64!, "base64");
+      const respostaVideo = await fetch(videoOriginalUrl!);
+      if (!respostaVideo.ok) {
+        return NextResponse.json({ error: "Falha ao buscar o vídeo original enviado." }, { status: 502 });
+      }
+      const videoBuffer = Buffer.from(await respostaVideo.arrayBuffer());
       await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay, saidaPath });
     } else {
       // O Pexels indexa o catálogo majoritariamente em inglês — buscar com a

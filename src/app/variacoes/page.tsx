@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ChangeEvent } from "react";
+import { upload } from "@vercel/blob/client";
 
 type Formato = "imagem" | "video" | "video_original";
 
@@ -27,21 +28,7 @@ function base64ParaUrlDeVideo(base64: string, mimeType = "video/mp4"): string {
   return URL.createObjectURL(blob);
 }
 
-function arquivoParaBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const resultado = reader.result as string;
-      // reader.result vem como data URL ("data:video/mp4;base64,AAAA...") — pega só a parte base64.
-      const virgula = resultado.indexOf(",");
-      resolve(virgula >= 0 ? resultado.slice(virgula + 1) : resultado);
-    };
-    reader.onerror = () => reject(reader.error || new Error("Falha ao ler o arquivo."));
-    reader.readAsDataURL(file);
-  });
-}
-
-const TAMANHO_MAXIMO_VIDEO_MB = 18;
+const TAMANHO_MAXIMO_VIDEO_MB = 80;
 
 export default function VariacoesPage() {
   const [referencia, setReferencia] = useState("");
@@ -54,7 +41,7 @@ export default function VariacoesPage() {
   // Vídeo próprio enviado como referência (opcional): a IA analisa e preenche
   // a referência/nicho sozinha, e depois decide — variação por variação — se
   // reaproveita esse vídeo como visual ou gera uma cena nova.
-  const [videoOriginalBase64, setVideoOriginalBase64] = useState<string | null>(null);
+  const [videoOriginalUrl, setVideoOriginalUrl] = useState<string | null>(null);
   const [videoOriginalNome, setVideoOriginalNome] = useState<string | null>(null);
   const [descricaoVisualOriginal, setDescricaoVisualOriginal] = useState<string | null>(null);
   const [analisandoVideo, setAnalisandoVideo] = useState(false);
@@ -76,18 +63,23 @@ export default function VariacoesPage() {
     setErroAnaliseVideo(null);
     setDescricaoVisualOriginal(null);
     try {
-      const base64 = await arquivoParaBase64(file);
-      const mimeType = file.type || "video/mp4";
+      // Sobe o arquivo direto do navegador pro Vercel Blob — não passa pelo
+      // corpo de nenhuma função nossa, então não esbarra no limite de ~4.5MB
+      // de requisição das Vercel Functions.
+      const resultado = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/variacoes/video-upload",
+      });
 
       const res = await fetch("/api/variacoes/analisar-video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoBase64: base64, mimeType }),
+        body: JSON.stringify({ videoUrl: resultado.url, mimeType: file.type || "video/mp4" }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Erro ao analisar o vídeo.");
 
-      setVideoOriginalBase64(base64);
+      setVideoOriginalUrl(resultado.url);
       setVideoOriginalNome(file.name);
       setDescricaoVisualOriginal(json.descricaoVisual || "");
       setReferencia(json.referencia || "");
@@ -100,7 +92,7 @@ export default function VariacoesPage() {
   }
 
   function removerVideoOriginal() {
-    setVideoOriginalBase64(null);
+    setVideoOriginalUrl(null);
     setVideoOriginalNome(null);
     setDescricaoVisualOriginal(null);
     setErroAnaliseVideo(null);
@@ -127,7 +119,7 @@ export default function VariacoesPage() {
       const variacoes: { texto: string; usarVisualOriginal: boolean; descricaoVisual: string }[] = json.variacoes;
       const novosCards: CardVariacao[] = variacoes.map((v) => ({
         texto: v.texto,
-        formato: v.usarVisualOriginal && videoOriginalBase64 ? "video_original" : "imagem",
+        formato: v.usarVisualOriginal && videoOriginalUrl ? "video_original" : "imagem",
         descricaoVisual: v.descricaoVisual || nicho || referencia,
         textoOverlay: "",
         gerando: false,
@@ -156,7 +148,7 @@ export default function VariacoesPage() {
       formato: card.formato,
       descricaoVisual: card.descricaoVisual,
       textoOverlay: card.textoOverlay || undefined,
-      videoOriginalBase64: card.formato === "video_original" ? videoOriginalBase64 || undefined : undefined,
+      videoOriginalUrl: card.formato === "video_original" ? videoOriginalUrl || undefined : undefined,
     };
   }
 
@@ -322,7 +314,7 @@ export default function VariacoesPage() {
                   />
                   Vídeo stock
                 </label>
-                {videoOriginalBase64 && (
+                {videoOriginalUrl && (
                   <label className="flex items-center gap-1 text-sm">
                     <input
                       type="radio"
