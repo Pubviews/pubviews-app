@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
     "fluent-ffmpeg",
     "@ffmpeg-installer/ffmpeg",
     "@ffprobe-installer/ffprobe",
+    "@napi-rs/canvas",
   ],
 };
 
