@@ -19,8 +19,19 @@ function garantirFonteRegistrada() {
   }
 }
 
-const W = 1080;
-const H = 1920;
+// Formatos de saída suportados: vertical (padrão, Stories/Reels) e quadrado
+// (feed). Ambos usam a mesma largura — só a altura muda — então o botão de
+// CTA (dimensionado em pixels absolutos) fica com o mesmo tamanho visual
+// nos dois, e a margem em relação à base é recalculada proporcionalmente.
+export type FormatoVideo = "vertical" | "quadrado";
+
+const FORMATOS: Record<FormatoVideo, { largura: number; altura: number }> = {
+  vertical: { largura: 1080, altura: 1920 },
+  quadrado: { largura: 1080, altura: 1080 },
+};
+
+// Proporção original da margem inferior do botão (420px numa altura de 1920px).
+const MARGEM_INFERIOR_PROPORCAO = 420 / 1920;
 
 function tmpFile(ext: string): string {
   return path.join(os.tmpdir(), `pv-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
@@ -206,6 +217,8 @@ interface MontarVideoOpts {
   audioBuffer: Buffer;
   textoOverlay?: string;
   saidaPath: string;
+  /** "vertical" (1080x1920, padrão) ou "quadrado" (1080x1080). */
+  formatoVideo?: FormatoVideo;
 }
 
 /**
@@ -241,6 +254,9 @@ async function prepararBotao(
 export async function montarVideoComImagem(
   opts: MontarVideoOpts & { imagemBuffer: Buffer }
 ): Promise<void> {
+  const { largura: W, altura: H } = FORMATOS[opts.formatoVideo ?? "vertical"];
+  const margemInferior = Math.round(H * MARGEM_INFERIOR_PROPORCAO);
+
   const imgPath = tmpFile("png");
   const audioPath = tmpFile("mp3");
   await fs.writeFile(imgPath, opts.imagemBuffer);
@@ -252,14 +268,14 @@ export async function montarVideoComImagem(
   const totalFrames = Math.ceil(duration * fps);
 
   const filtros = [
-    // Ajusta a imagem para preencher 1080x1920 (crop central) antes do zoom.
+    // Ajusta a imagem para preencher o formato de saída (crop central) antes do zoom.
     `[0:v]scale=${W * 1.5}:${H * 1.5}:force_original_aspect_ratio=increase,crop=${W * 1.5}:${H * 1.5}` +
       `,zoompan=z='min(zoom+0.0008,1.15)':d=${totalFrames}:s=${W}x${H}:fps=${fps}[zoomed]`,
   ];
   let lastLabel = "zoomed";
 
   if (botaoPath) {
-    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-420[out]`);
+    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-${margemInferior}[out]`);
     lastLabel = "out";
   }
 
@@ -294,6 +310,9 @@ export async function montarVideoComImagem(
 export async function montarVideoComVideo(
   opts: MontarVideoOpts & { videoBuffer: Buffer }
 ): Promise<void> {
+  const { largura: W, altura: H } = FORMATOS[opts.formatoVideo ?? "vertical"];
+  const margemInferior = Math.round(H * MARGEM_INFERIOR_PROPORCAO);
+
   const vidPath = tmpFile("mp4");
   const audioPath = tmpFile("mp3");
   await fs.writeFile(vidPath, opts.videoBuffer);
@@ -310,7 +329,7 @@ export async function montarVideoComVideo(
   let lastLabel = "cropped";
 
   if (botaoPath) {
-    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-420[out]`);
+    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-${margemInferior}[out]`);
     lastLabel = "out";
   }
 
