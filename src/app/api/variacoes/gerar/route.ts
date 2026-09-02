@@ -13,13 +13,21 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const texto: string = body.texto;
-    const formato: "imagem" | "video" = body.formato === "video" ? "video" : "imagem";
+    const formato: "imagem" | "video" | "video_original" =
+      body.formato === "video" ? "video" : body.formato === "video_original" ? "video_original" : "imagem";
     const descricaoVisual: string = body.descricaoVisual || texto;
     const textoOverlay: string | undefined = body.textoOverlay || undefined;
     const voiceId: string | undefined = body.voiceId || undefined;
+    const videoOriginalBase64: string | undefined = body.videoOriginalBase64 || undefined;
 
     if (!texto) {
       return NextResponse.json({ error: "Informe o texto da narração (texto)." }, { status: 400 });
+    }
+    if (formato === "video_original" && !videoOriginalBase64) {
+      return NextResponse.json(
+        { error: "Formato 'video_original' escolhido, mas nenhum vídeo original foi enviado (videoOriginalBase64)." },
+        { status: 400 }
+      );
     }
 
     const audioBuffer = await gerarNarracao(texto, voiceId);
@@ -28,6 +36,12 @@ export async function POST(req: NextRequest) {
       const imagem = await gerarImagem(descricaoVisual);
       const imagemBuffer = Buffer.from(imagem.base64, "base64");
       await montarVideoComImagem({ audioBuffer, imagemBuffer, textoOverlay, saidaPath });
+    } else if (formato === "video_original") {
+      // Reaproveita o vídeo original enviado pelo usuário como visual — a
+      // narração e o CTA são os novos, a cena continua sendo a do criativo
+      // vencedor de verdade (não busca nada no Pexels nem gera imagem).
+      const videoBuffer = Buffer.from(videoOriginalBase64!, "base64");
+      await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay, saidaPath });
     } else {
       // O Pexels indexa o catálogo majoritariamente em inglês — buscar com a
       // descrição em português (ex: "curso de empilhadeira") costuma trazer

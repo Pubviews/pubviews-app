@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ChangeEvent } from "react";
 
-type Formato = "imagem" | "video";
+type Formato = "imagem" | "video" | "video_original";
 
 interface CardVariacao {
   texto: string;
@@ -19,13 +19,29 @@ interface CardVariacao {
   videoUrlQuadrado: string | null;
 }
 
-function base64ParaUrlDeVideo(base64: string): string {
+function base64ParaUrlDeVideo(base64: string, mimeType = "video/mp4"): string {
   const bytes = atob(base64);
   const array = new Uint8Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) array[i] = bytes.charCodeAt(i);
-  const blob = new Blob([array], { type: "video/mp4" });
+  const blob = new Blob([array], { type: mimeType });
   return URL.createObjectURL(blob);
 }
+
+function arquivoParaBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const resultado = reader.result as string;
+      // reader.result vem como data URL ("data:video/mp4;base64,AAAA...") — pega só a parte base64.
+      const virgula = resultado.indexOf(",");
+      resolve(virgula >= 0 ? resultado.slice(virgula + 1) : resultado);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Falha ao ler o arquivo."));
+    reader.readAsDataURL(file);
+  });
+}
+
+const TAMANHO_MAXIMO_VIDEO_MB = 18;
 
 export default function VariacoesPage() {
   const [referencia, setReferencia] = useState("");
@@ -35,6 +51,61 @@ export default function VariacoesPage() {
   const [erroRoteiros, setErroRoteiros] = useState<string | null>(null);
   const [cards, setCards] = useState<CardVariacao[]>([]);
 
+  // Vídeo próprio enviado como referência (opcional): a IA analisa e preenche
+  // a referência/nicho sozinha, e depois decide — variação por variação — se
+  // reaproveita esse vídeo como visual ou gera uma cena nova.
+  const [videoOriginalBase64, setVideoOriginalBase64] = useState<string | null>(null);
+  const [videoOriginalNome, setVideoOriginalNome] = useState<string | null>(null);
+  const [descricaoVisualOriginal, setDescricaoVisualOriginal] = useState<string | null>(null);
+  const [analisandoVideo, setAnalisandoVideo] = useState(false);
+  const [erroAnaliseVideo, setErroAnaliseVideo] = useState<string | null>(null);
+
+  async function selecionarVideoOriginal(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // permite selecionar o mesmo arquivo de novo depois
+    if (!file) return;
+
+    if (file.size > TAMANHO_MAXIMO_VIDEO_MB * 1024 * 1024) {
+      setErroAnaliseVideo(
+        `Vídeo muito grande (${(file.size / (1024 * 1024)).toFixed(1)}MB). Envie um arquivo de até ${TAMANHO_MAXIMO_VIDEO_MB}MB (tente comprimir ou cortar o vídeo).`
+      );
+      return;
+    }
+
+    setAnalisandoVideo(true);
+    setErroAnaliseVideo(null);
+    setDescricaoVisualOriginal(null);
+    try {
+      const base64 = await arquivoParaBase64(file);
+      const mimeType = file.type || "video/mp4";
+
+      const res = await fetch("/api/variacoes/analisar-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoBase64: base64, mimeType }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Erro ao analisar o vídeo.");
+
+      setVideoOriginalBase64(base64);
+      setVideoOriginalNome(file.name);
+      setDescricaoVisualOriginal(json.descricaoVisual || "");
+      setReferencia(json.referencia || "");
+      if (json.nicho) setNicho(json.nicho);
+    } catch (err) {
+      setErroAnaliseVideo(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAnalisandoVideo(false);
+    }
+  }
+
+  function removerVideoOriginal() {
+    setVideoOriginalBase64(null);
+    setVideoOriginalNome(null);
+    setDescricaoVisualOriginal(null);
+    setErroAnaliseVideo(null);
+  }
+
   async function gerarRoteiros() {
     setCarregandoRoteiros(true);
     setErroRoteiros(null);
@@ -43,14 +114,21 @@ export default function VariacoesPage() {
       const res = await fetch("/api/variacoes/roteiro", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ referencia, nicho, quantidade }),
+        body: JSON.stringify({
+          referencia,
+          nicho,
+          quantidade,
+          descricaoVisualOriginal: descricaoVisualOriginal || undefined,
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Erro ao gerar roteiros.");
-      const novosCards: CardVariacao[] = (json.variacoes as string[]).map((texto) => ({
-        texto,
-        formato: "imagem",
-        descricaoVisual: nicho || referencia,
+
+      const variacoes: { texto: string; usarVisualOriginal: boolean; descricaoVisual: string }[] = json.variacoes;
+      const novosCards: CardVariacao[] = variacoes.map((v) => ({
+        texto: v.texto,
+        formato: v.usarVisualOriginal && videoOriginalBase64 ? "video_original" : "imagem",
+        descricaoVisual: v.descricaoVisual || nicho || referencia,
         textoOverlay: "",
         gerando: false,
         erro: null,
@@ -72,6 +150,16 @@ export default function VariacoesPage() {
     setCards((prev) => prev.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
   }
 
+  function corpoDaGeracao(card: CardVariacao) {
+    return {
+      texto: card.texto,
+      formato: card.formato,
+      descricaoVisual: card.descricaoVisual,
+      textoOverlay: card.textoOverlay || undefined,
+      videoOriginalBase64: card.formato === "video_original" ? videoOriginalBase64 || undefined : undefined,
+    };
+  }
+
   async function gerarVideo(idx: number) {
     const card = cards[idx];
     atualizarCard(idx, { gerando: true, erro: null });
@@ -79,12 +167,7 @@ export default function VariacoesPage() {
       const res = await fetch("/api/variacoes/gerar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          texto: card.texto,
-          formato: card.formato,
-          descricaoVisual: card.descricaoVisual,
-          textoOverlay: card.textoOverlay || undefined,
-        }),
+        body: JSON.stringify(corpoDaGeracao(card)),
       });
       if (!res.ok) {
         const json = await res.json().catch(() => ({ error: "Erro ao gerar vídeo." }));
@@ -105,12 +188,7 @@ export default function VariacoesPage() {
       const res = await fetch("/api/variacoes/gerar-multiformato", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          texto: card.texto,
-          formato: card.formato,
-          descricaoVisual: card.descricaoVisual,
-          textoOverlay: card.textoOverlay || undefined,
-        }),
+        body: JSON.stringify(corpoDaGeracao(card)),
       });
       const json = await res.json().catch(() => ({ error: "Erro ao gerar os vídeos." }));
       if (!res.ok) throw new Error(json.error || "Erro ao gerar os vídeos.");
@@ -129,8 +207,8 @@ export default function VariacoesPage() {
     <div className="mx-auto max-w-5xl px-6 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Variações de criativo</h1>
       <p className="mt-2 text-sm text-zinc-600">
-        Descreva o criativo vencedor (nosso) e gere novas versões: roteiro, narração e vídeo
-        montado, tudo aqui dentro.
+        Descreva o criativo vencedor (nosso) — ou envie o vídeo dele — e gere novas versões:
+        roteiro, narração e vídeo montado, tudo aqui dentro.
       </p>
 
       <div className="mt-6 flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-6">
@@ -146,6 +224,43 @@ export default function VariacoesPage() {
             className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
           />
         </div>
+
+        <div className="rounded-md border border-dashed border-zinc-300 p-3">
+          <label className="block text-sm font-medium text-zinc-700">
+            Ou envie o vídeo do criativo vencedor (opcional)
+          </label>
+          <p className="mt-1 text-xs text-zinc-500">
+            A IA assiste ao vídeo, preenche a referência e o nicho sozinha, e decide em cada
+            variação se reaproveita esse mesmo vídeo como visual ou gera uma cena nova — o que
+            fizer mais sentido pro roteiro. Até {TAMANHO_MAXIMO_VIDEO_MB}MB.
+          </p>
+          <div className="mt-2 flex items-center gap-3">
+            <input
+              type="file"
+              accept="video/*"
+              onChange={selecionarVideoOriginal}
+              disabled={analisandoVideo}
+              className="text-sm"
+            />
+            {videoOriginalNome && (
+              <button
+                onClick={removerVideoOriginal}
+                type="button"
+                className="text-xs text-zinc-500 underline underline-offset-2"
+              >
+                remover vídeo
+              </button>
+            )}
+          </div>
+          {analisandoVideo && <p className="mt-2 text-sm text-zinc-600">Analisando vídeo...</p>}
+          {erroAnaliseVideo && <p className="mt-2 text-sm text-red-700">{erroAnaliseVideo}</p>}
+          {videoOriginalNome && !analisandoVideo && !erroAnaliseVideo && (
+            <p className="mt-2 text-sm text-green-700">
+              Vídeo analisado: {videoOriginalNome} — referência e nicho preenchidos abaixo (pode editar).
+            </p>
+          )}
+        </div>
+
         <div className="flex flex-col gap-4 sm:flex-row">
           <div className="flex-1">
             <label className="block text-sm font-medium text-zinc-700">Nicho</label>
@@ -190,7 +305,7 @@ export default function VariacoesPage() {
                 className="mt-2 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
               />
 
-              <div className="mt-3 flex gap-3">
+              <div className="mt-3 flex flex-wrap gap-3">
                 <label className="flex items-center gap-1 text-sm">
                   <input
                     type="radio"
@@ -207,18 +322,36 @@ export default function VariacoesPage() {
                   />
                   Vídeo stock
                 </label>
+                {videoOriginalBase64 && (
+                  <label className="flex items-center gap-1 text-sm">
+                    <input
+                      type="radio"
+                      checked={card.formato === "video_original"}
+                      onChange={() => atualizarCard(idx, { formato: "video_original" })}
+                    />
+                    Vídeo original enviado
+                  </label>
+                )}
               </div>
+              {card.formato === "video_original" && (
+                <p className="mt-1 text-xs text-zinc-500">
+                  A IA achou que a cena do seu vídeo ainda combina com esse roteiro — vai usar o
+                  vídeo enviado como visual, só trocando narração e CTA.
+                </p>
+              )}
 
-              <div className="mt-3">
-                <label className="block text-xs font-medium text-zinc-500">
-                  {card.formato === "imagem" ? "Descrição da imagem (cena)" : "Termo de busca do vídeo (stock)"}
-                </label>
-                <input
-                  value={card.descricaoVisual}
-                  onChange={(e) => atualizarCard(idx, { descricaoVisual: e.target.value })}
-                  className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
-                />
-              </div>
+              {card.formato !== "video_original" && (
+                <div className="mt-3">
+                  <label className="block text-xs font-medium text-zinc-500">
+                    {card.formato === "imagem" ? "Descrição da imagem (cena)" : "Termo de busca do vídeo (stock)"}
+                  </label>
+                  <input
+                    value={card.descricaoVisual}
+                    onChange={(e) => atualizarCard(idx, { descricaoVisual: e.target.value })}
+                    className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                  />
+                </div>
+              )}
 
               <div className="mt-3">
                 <label className="block text-xs font-medium text-zinc-500">Texto sobreposto (opcional, ex. CTA)</label>
