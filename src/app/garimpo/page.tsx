@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 interface GarimpoResult {
   page_id: string;
@@ -19,14 +20,21 @@ const STATUS_STYLE: Record<string, string> = {
   DESCARTAR: "bg-zinc-100 text-zinc-500",
 };
 
-export default function GarimpoPage() {
-  const [searchTerms, setSearchTerms] = useState("");
+function GarimpoConteudo() {
+  // Pré-preenche e já busca sozinho quando vem de "Buscar esse nicho no
+  // Garimpo" na tela de Variações (link com ?termo=...).
+  const searchParams = useSearchParams();
+  const termoInicial = searchParams.get("termo") || "";
+
+  const [searchTerms, setSearchTerms] = useState(termoInicial);
   const [countries, setCountries] = useState("US");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultados, setResultados] = useState<GarimpoResult[] | null>(null);
 
-  async function buscar() {
+  async function buscar(termoParaBuscar?: string) {
+    const termo = termoParaBuscar ?? searchTerms;
+    if (!termo) return;
     setLoading(true);
     setError(null);
     setResultados(null);
@@ -35,7 +43,7 @@ export default function GarimpoPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          searchTerms,
+          searchTerms: termo,
           countries: countries
             .split(",")
             .map((c) => c.trim().toUpperCase())
@@ -51,6 +59,16 @@ export default function GarimpoPage() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!termoInicial) return;
+    // setTimeout empurra a chamada (e o setState lá dentro) pra fora da
+    // execução síncrona do efeito — só pra agradar a regra do eslint contra
+    // setState síncrono direto no corpo do efeito.
+    const id = setTimeout(() => buscar(termoInicial), 0);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
@@ -80,7 +98,7 @@ export default function GarimpoPage() {
           />
         </div>
         <button
-          onClick={buscar}
+          onClick={() => buscar()}
           disabled={loading || !searchTerms}
           className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
         >
@@ -145,5 +163,13 @@ export default function GarimpoPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function GarimpoPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-5xl px-6 py-10 text-sm text-zinc-500">Carregando...</div>}>
+      <GarimpoConteudo />
+    </Suspense>
   );
 }

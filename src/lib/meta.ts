@@ -113,3 +113,97 @@ export async function searchAdLibrary(params: {
 
   return results;
 }
+
+export interface AnuncioDaBiblioteca {
+  id: string;
+  pageName: string;
+  textoPrincipal: string;
+  titulo: string;
+  descricao: string;
+  snapshotUrl: string;
+}
+
+/**
+ * Extrai o ID do anúncio (ad_archive_id) de um link da Ad Library colado
+ * pelo usuário — normalmente algo como
+ * "https://www.facebook.com/ads/library/?id=1234567890123456", mas aceita
+ * qualquer URL com "id=" na query, ou até só o número copiado direto.
+ */
+export function extrairIdDoAnuncio(url: string): string | null {
+  try {
+    const u = new URL(url);
+    const id = u.searchParams.get("id");
+    if (id && /^\d+$/.test(id)) return id;
+  } catch {
+    // não é uma URL válida — tenta achar um número grande no texto mesmo assim
+  }
+  const match = url.match(/(\d{10,})/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Busca os dados públicos de UM anúncio específico da Ad Library pelo ID
+ * (o node "ArchivedAd" do Graph API aceita GET direto por ID, além da busca
+ * por palavra-chave usada em searchAdLibrary).
+ */
+export async function buscarAnuncioPorId(adId: string): Promise<AnuncioDaBiblioteca> {
+  const token = env.metaAccessToken();
+  const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/${adId}`);
+  url.searchParams.set("access_token", token);
+  url.searchParams.set(
+    "fields",
+    "id,page_name,ad_creative_bodies,ad_creative_link_titles,ad_creative_link_descriptions,ad_snapshot_url"
+  );
+
+  const res = await fetch(url.toString());
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(
+      `Não consegui buscar esse anúncio na Ad Library (erro ${res.status}). Confira se o link é de um anúncio ativo/público. Detalhe: ${body.slice(0, 300)}`
+    );
+  }
+  const json = await res.json();
+
+  return {
+    id: json.id || adId,
+    pageName: json.page_name || "",
+    textoPrincipal: (json.ad_creative_bodies || [])[0] || "",
+    titulo: (json.ad_creative_link_titles || [])[0] || "",
+    descricao: (json.ad_creative_link_descriptions || [])[0] || "",
+    snapshotUrl: json.ad_snapshot_url || `https://www.facebook.com/ads/library/?id=${adId}`,
+  };
+}
+
+/**
+ * Tenta extrair a URL do vídeo (ou, na falta dele, de uma imagem) do
+ * anúncio a partir da página pública de snapshot da Ad Library
+ * (ad_snapshot_url — a própria Meta descreve esse campo como "exibe imagens
+ * e vídeos não comprimidos do anúncio"). Isso é uma tentativa por fora da
+ * API oficial de dados estruturados: a Meta não expõe o arquivo de mídia
+ * como campo — então é best-effort, pode falhar ou parar de funcionar se a
+ * Meta mudar o HTML dessa página, e por isso nunca deve derrubar o fluxo
+ * principal (quem chama trata null/erro como "só achei o texto mesmo").
+ */
+export async function extrairMidiaDoSnapshot(
+  snapshotUrl: string
+): Promise<{ tipo: "video" | "imagem"; url: string } | null> {
+  try {
+    const res = await fetch(snapshotUrl, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; PubViewsTool/1.0)" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const limpar = (s: string) => s.replace(/\\u0026/g, "&").replace(/\\\//g, "/");
+
+    const video = html.match(/https:[^"'\s\\]+?\.mp4[^"'\s\\]*/i);
+    if (video) return { tipo: "video", url: limpar(video[0]) };
+
+    const imagem = html.match(/https:\/\/scontent[^"'\s\\]+?\.(?:jpg|jpeg|png)[^"'\s\\]*/i);
+    if (imagem) return { tipo: "imagem", url: limpar(imagem[0]) };
+
+    return null;
+  } catch {
+    return null;
+  }
+}

@@ -197,6 +197,30 @@ Nada além do array JSON.`;
 }
 
 /**
+ * Sugere um nicho curto (em português) a partir do texto de um anúncio —
+ * usado quando o usuário cola o link de um anúncio da Ad Library e a gente
+ * só tem o texto real do anúncio (Texto Principal/Título/Descrição), sem um
+ * campo de "nicho" pronto como esse.
+ */
+export async function sugerirNichoDoTexto(texto: string): Promise<string> {
+  const json = await callGemini(TEXT_MODEL, {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: `Baseado neste texto de um anúncio, responda só com uma categoria/nicho curta pro produto ou serviço anunciado (ex: "curso de empilhadeira"), em português, sem explicação e sem aspas: "${texto}"`,
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0.3 },
+  });
+  const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  return raw.trim().replace(/^["']|["']$/g, "");
+}
+
+/**
  * Sugere termos de busca em inglês (para Pexels) a partir de uma descrição de nicho/cena.
  */
 export async function sugerirTermosDeBusca(descricao: string): Promise<string> {

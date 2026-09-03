@@ -166,6 +166,61 @@ export default function VariacoesPage() {
     setErroAnaliseVideo(null);
   }
 
+  // Link de um anúncio específico da Ad Library que o usuário encontrou
+  // (concorrente/inspiração) — busca o texto real do anúncio (e tenta
+  // também achar o vídeo/imagem dele) pra usar de referência, igual ao
+  // fluxo de vídeo próprio acima.
+  const [urlBiblioteca, setUrlBiblioteca] = useState("");
+  const [analisandoBiblioteca, setAnalisandoBiblioteca] = useState(false);
+  const [erroBiblioteca, setErroBiblioteca] = useState<string | null>(null);
+  const [avisoBiblioteca, setAvisoBiblioteca] = useState<string | null>(null);
+  const [imagemPreviewBiblioteca, setImagemPreviewBiblioteca] = useState<string | null>(null);
+  const [nomeAnuncioBiblioteca, setNomeAnuncioBiblioteca] = useState<string | null>(null);
+
+  async function analisarLinkBiblioteca() {
+    if (!urlBiblioteca.trim()) return;
+    setAnalisandoBiblioteca(true);
+    setErroBiblioteca(null);
+    setAvisoBiblioteca(null);
+    setImagemPreviewBiblioteca(null);
+    try {
+      const res = await fetch("/api/variacoes/analisar-biblioteca", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: urlBiblioteca.trim() }),
+        signal: AbortSignal.timeout(150000),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Erro ao analisar o anúncio.");
+
+      setReferencia(json.referencia || "");
+      if (json.nicho) setNicho(json.nicho);
+      setNomeAnuncioBiblioteca(json.pageName || null);
+
+      if (json.videoOriginalUrl) {
+        // Mesmo estado do vídeo próprio — o resto do fluxo (reaproveitar
+        // visual variação por variação, "conter" sem cortar, etc.) já
+        // funciona igual, sem precisar de nenhum código a mais.
+        setVideoOriginalUrl(json.videoOriginalUrl);
+        setVideoOriginalNome(`Anúncio da Ad Library${json.pageName ? " — " + json.pageName : ""}`);
+        setDescricaoVisualOriginal(json.descricaoVisualOriginal || "");
+      }
+      if (json.imagemPreviewUrl) setImagemPreviewBiblioteca(json.imagemPreviewUrl);
+      if (json.aviso) setAvisoBiblioteca(json.aviso);
+    } catch (err) {
+      const timeout = err instanceof Error && err.name === "TimeoutError";
+      setErroBiblioteca(
+        timeout
+          ? "Demorou demais pra analisar esse anúncio. Tente de novo."
+          : err instanceof Error
+            ? err.message
+            : String(err)
+      );
+    } finally {
+      setAnalisandoBiblioteca(false);
+    }
+  }
+
   async function gerarRoteiros() {
     setCarregandoRoteiros(true);
     setErroRoteiros(null);
@@ -355,6 +410,50 @@ export default function VariacoesPage() {
           )}
         </div>
 
+        <div className="rounded-md border border-dashed border-zinc-300 p-3">
+          <label className="block text-sm font-medium text-zinc-700">
+            Ou cole o link de um anúncio que você encontrou na Ad Library (opcional)
+          </label>
+          <p className="mt-1 text-xs text-zinc-500">
+            De um concorrente ou inspiração — abra o anúncio na Ad Library, copie o link da página
+            dele (com &quot;id=&quot; na URL) e cole aqui. A gente busca o texto real do anúncio
+            (Texto Principal, Título, Descrição) e tenta também achar o vídeo/imagem dele — quando
+            acha o vídeo, ele fica disponível pra reaproveitar igual ao vídeo próprio acima.
+          </p>
+          <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+            <input
+              value={urlBiblioteca}
+              onChange={(e) => setUrlBiblioteca(e.target.value)}
+              placeholder="https://www.facebook.com/ads/library/?id=..."
+              disabled={analisandoBiblioteca}
+              className="flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={analisarLinkBiblioteca}
+              type="button"
+              disabled={analisandoBiblioteca || !urlBiblioteca.trim()}
+              className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+            >
+              {analisandoBiblioteca ? "Analisando..." : "Analisar anúncio"}
+            </button>
+          </div>
+          {erroBiblioteca && <p className="mt-2 text-sm text-red-700">{erroBiblioteca}</p>}
+          {avisoBiblioteca && <p className="mt-2 text-sm text-amber-700">{avisoBiblioteca}</p>}
+          {nomeAnuncioBiblioteca && !analisandoBiblioteca && !erroBiblioteca && (
+            <p className="mt-2 text-sm text-green-700">
+              Anúncio de &quot;{nomeAnuncioBiblioteca}&quot; analisado — referência e nicho
+              preenchidos abaixo (pode editar).
+            </p>
+          )}
+          {imagemPreviewBiblioteca && (
+            <div className="mt-2">
+              <p className="text-xs text-zinc-500">Imagem do anúncio encontrada (só como preview, não é reaproveitada pixel a pixel):</p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={imagemPreviewBiblioteca} alt="Preview do anúncio encontrado" className="mt-1 max-h-40 rounded-md border border-zinc-200" />
+            </div>
+          )}
+        </div>
+
         <div className="flex flex-col gap-4 sm:flex-row">
           <div className="flex-1">
             <label className="block text-sm font-medium text-zinc-700">Nicho</label>
@@ -364,6 +463,16 @@ export default function VariacoesPage() {
               placeholder="ex: curso de empilhadeira"
               className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
             />
+            {nicho && (
+              <a
+                href={`/garimpo?termo=${encodeURIComponent(nicho)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-xs text-zinc-500 underline underline-offset-2"
+              >
+                Buscar esse nicho no Garimpo →
+              </a>
+            )}
           </div>
           <div className="sm:w-40">
             <label className="block text-sm font-medium text-zinc-700">Quantidade</label>
