@@ -111,20 +111,17 @@ function melhoresTextos(
 }
 
 /**
- * Busca anúncios na Meta Ad Library por palavra-chave, em uma ou mais
- * combinações de países, e agrupa por página para aplicar os critérios:
- * ativo há 30+ dias e 3+ anúncios simultâneos da mesma página.
+ * Busca (só a chamada crua à API, sem agrupar por página) anúncios ativos na
+ * Meta Ad Library por palavra-chave, em uma ou mais combinações de países.
+ * Separada de montarResultadoGarimpo pra poder buscar vários termos (o
+ * original + termos parecidos sugeridos pela IA) e só agrupar/analisar tudo
+ * junto no final — ver searchAdLibrary, abaixo.
  */
-export async function searchAdLibrary(params: {
+export async function buscarAnunciosAtivos(params: {
   searchTerms: string;
   countries: string[];
   limit?: number;
-}): Promise<{
-  resultados: GarimpoResult[];
-  melhoresTextosPrincipais: MelhorTexto[];
-  melhoresTitulos: MelhorTexto[];
-  melhoresDescricoes: MelhorTexto[];
-}> {
+}): Promise<AdLibraryAd[]> {
   const token = env.metaAccessToken();
   const limit = params.limit ?? 200;
 
@@ -157,6 +154,22 @@ export async function searchAdLibrary(params: {
     pages += 1;
   }
 
+  return allAds;
+}
+
+/**
+ * Agrupa por página um conjunto de anúncios já buscados (ver
+ * buscarAnunciosAtivos) e aplica os critérios: ativo há 30+ dias e 3+
+ * anúncios simultâneos da mesma página. Separada da busca em si pra poder
+ * juntar anúncios de vários termos de busca (original + parecidos) antes de
+ * agrupar/analisar tudo de uma vez só.
+ */
+export function montarResultadoGarimpo(allAds: AdLibraryAd[]): {
+  resultados: GarimpoResult[];
+  melhoresTextosPrincipais: MelhorTexto[];
+  melhoresTitulos: MelhorTexto[];
+  melhoresDescricoes: MelhorTexto[];
+} {
   const byPage = new Map<string, AdLibraryAd[]>();
   for (const ad of allAds) {
     const list = byPage.get(ad.page_id) ?? [];
@@ -227,6 +240,97 @@ export async function searchAdLibrary(params: {
     melhoresTextosPrincipais: melhoresTextos(adsCandidatos, "ad_creative_bodies"),
     melhoresTitulos: melhoresTextos(adsCandidatos, "ad_creative_link_titles"),
     melhoresDescricoes: melhoresTextos(adsCandidatos, "ad_creative_link_descriptions"),
+  };
+}
+
+// Abaixo desse número de páginas distintas encontradas com o termo original,
+// a busca é ampliada automaticamente com termos parecidos (sugeridos pela
+// IA) — muitos termos bons acham pouco na Ad Library só por causa de como a
+// Meta indexa o texto do anúncio, e um termo parecido às vezes acha o que o
+// original não achou, sem sair do nicho.
+const LIMIAR_PARA_AMPLIAR = 5;
+const MAX_TERMOS_EXTRAS = 3;
+
+export interface BuscaGarimpoAmpliada {
+  resultados: GarimpoResult[];
+  melhoresTextosPrincipais: MelhorTexto[];
+  melhoresTitulos: MelhorTexto[];
+  melhoresDescricoes: MelhorTexto[];
+  termoOriginal: string;
+  // Termos parecidos que a IA sugeriu e que a gente de fato tentou buscar
+  // (vazio se a busca original já achou o suficiente, ou se o usuário
+  // desligou a ampliação automática).
+  termosTentados: string[];
+  // Entre os termosTentados, os que realmente trouxeram algum anúncio a mais
+  // — é o que vale mostrar pro usuário como "também buscamos por".
+  termosComResultado: string[];
+}
+
+/**
+ * Busca na Ad Library pelo termo original e, se o resultado for pobre,
+ * amplia automaticamente com termos parecidos (mesmo nicho, sugeridos pela
+ * IA) — sem nunca sair do nicho pedido pelo usuário, já que os termos extras
+ * são sinônimos/variações de fraseado do termo original, não termos livres.
+ * Um termo extra falhar (Meta API ou IA fora do ar) nunca derruba a busca
+ * inteira: o resultado do termo original sempre é devolvido, na pior das
+ * hipóteses sem a ampliação.
+ */
+export async function searchAdLibrary(params: {
+  searchTerms: string;
+  countries: string[];
+  limit?: number;
+  ampliar?: boolean;
+}): Promise<BuscaGarimpoAmpliada> {
+  const adsOriginal = await buscarAnunciosAtivos({
+    searchTerms: params.searchTerms,
+    countries: params.countries,
+    limit: params.limit,
+  });
+
+  const adsPorTermo = new Map<string, AdLibraryAd[]>([[params.searchTerms, adsOriginal]]);
+  let termosTentados: string[] = [];
+
+  const paginasDistintas = new Set(adsOriginal.map((a) => a.page_id)).size;
+  const devePermitirAmpliar = params.ampliar !== false;
+
+  if (devePermitirAmpliar && paginasDistintas < LIMIAR_PARA_AMPLIAR) {
+    let termosSugeridos: string[] = [];
+    try {
+      // Import feito aqui dentro (não no topo do arquivo) só pra manter este
+      // módulo (integração com a Meta) sem depender do módulo do Gemini a
+      // menos que a ampliação realmente seja usada.
+      const { sugerirTermosRelacionados } = await import("./gemini");
+      termosSugeridos = await sugerirTermosRelacionados(params.searchTerms, MAX_TERMOS_EXTRAS);
+    } catch {
+      termosSugeridos = []; // IA fora do ar — segue só com o termo original
+    }
+
+    termosTentados = termosSugeridos;
+    const resultadosExtras = await Promise.all(
+      termosSugeridos.map((termo) =>
+        buscarAnunciosAtivos({ searchTerms: termo, countries: params.countries, limit: params.limit }).catch(
+          () => [] as AdLibraryAd[]
+        )
+      )
+    );
+    termosSugeridos.forEach((termo, i) => adsPorTermo.set(termo, resultadosExtras[i]));
+  }
+
+  // Junta tudo, removendo duplicata (mesmo anúncio pode aparecer pra mais de
+  // um termo de busca) pelo id do anúncio.
+  const todosOsAdsPorId = new Map<string, AdLibraryAd>();
+  for (const ads of adsPorTermo.values()) {
+    for (const ad of ads) todosOsAdsPorId.set(ad.id, ad);
+  }
+
+  const termosComResultado = termosTentados.filter((termo) => (adsPorTermo.get(termo)?.length ?? 0) > 0);
+  const busca = montarResultadoGarimpo(Array.from(todosOsAdsPorId.values()));
+
+  return {
+    ...busca,
+    termoOriginal: params.searchTerms,
+    termosTentados,
+    termosComResultado,
   };
 }
 

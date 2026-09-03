@@ -268,6 +268,52 @@ Responda em JSON puro, um array de strings, exemplo: ["variação 1", "variaçã
 }
 
 /**
+ * Sugere termos de busca ALTERNATIVOS, no mesmo nicho do termo original, pra
+ * ampliar uma busca na Ad Library que achou pouco — sinônimos, variações de
+ * fraseado, termos mais genéricos ou mais específicos, mas sempre o mesmo
+ * produto/serviço (nunca muda de nicho).
+ */
+export async function sugerirTermosRelacionados(termo: string, quantidade = 3): Promise<string[]> {
+  const prompt = `Você busca anúncios na Meta Ad Library (Facebook/Instagram) por palavra-chave.
+Termo de busca original: "${termo}"
+
+Gere ${quantidade} termos de busca ALTERNATIVOS, em INGLÊS, que um comprador de mídia usaria pra encontrar anúncios do MESMO nicho/produto/serviço que "${termo}" — sinônimos, variações de fraseado, e termos um pouco mais genéricos ou mais específicos, mas sempre claramente o mesmo nicho. NÃO mude de nicho/produto (ex: se o termo é sobre curso/certificação de empilhadeira, não sugira algo como "warehouse jobs" ou "logistics company" — fique em torno de curso/certificação/treinamento de empilhadeira). Cada termo deve ter de 1 a 4 palavras, sem aspas, sem explicação, diferente entre si.
+
+Responda em JSON puro, um array de strings, exemplo: ["termo 1", "termo 2", "termo 3"]. Nada além do array JSON.`;
+
+  const json = await callGemini(TEXT_MODEL, {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.6 },
+  });
+
+  const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
+  const cleaned = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "");
+  let termos: string[] = [];
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) termos = parsed.map(String);
+  } catch {
+    termos = cleaned
+      .split("\n")
+      .map((l) => l.replace(/^[-\d.\s"]+/, "").replace(/"$/, "").trim())
+      .filter(Boolean);
+  }
+
+  const termoNormalizado = termo.trim().toLowerCase();
+  const vistos = new Set<string>();
+  const resultado: string[] = [];
+  for (const t of termos) {
+    const limpo = t.trim();
+    const chave = limpo.toLowerCase();
+    if (!limpo || chave === termoNormalizado || vistos.has(chave)) continue;
+    vistos.add(chave);
+    resultado.push(limpo);
+    if (resultado.length >= quantidade) break;
+  }
+  return resultado;
+}
+
+/**
  * Sugere termos de busca em inglês (para Pexels) a partir de uma descrição de nicho/cena.
  */
 export async function sugerirTermosDeBusca(descricao: string): Promise<string> {

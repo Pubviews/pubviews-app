@@ -168,12 +168,15 @@ function GarimpoConteudo() {
 
   const [searchTerms, setSearchTerms] = useState(termoInicial);
   const [countries, setCountries] = useState("US");
+  const [ampliar, setAmpliar] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultados, setResultados] = useState<GarimpoResult[] | null>(null);
   const [melhoresTextosPrincipais, setMelhoresTextosPrincipais] = useState<MelhorTexto[]>([]);
   const [melhoresTitulos, setMelhoresTitulos] = useState<MelhorTexto[]>([]);
   const [melhoresDescricoes, setMelhoresDescricoes] = useState<MelhorTexto[]>([]);
+  const [termosComResultado, setTermosComResultado] = useState<string[]>([]);
+  const [termosTentados, setTermosTentados] = useState<string[]>([]);
 
   async function buscar(termoParaBuscar?: string) {
     const termo = termoParaBuscar ?? searchTerms;
@@ -184,6 +187,8 @@ function GarimpoConteudo() {
     setMelhoresTextosPrincipais([]);
     setMelhoresTitulos([]);
     setMelhoresDescricoes([]);
+    setTermosComResultado([]);
+    setTermosTentados([]);
     try {
       const res = await fetch("/api/garimpo", {
         method: "POST",
@@ -194,6 +199,7 @@ function GarimpoConteudo() {
             .split(",")
             .map((c) => c.trim().toUpperCase())
             .filter(Boolean),
+          ampliar,
         }),
       });
       const json = await res.json();
@@ -202,6 +208,8 @@ function GarimpoConteudo() {
       setMelhoresTextosPrincipais(json.melhoresTextosPrincipais || []);
       setMelhoresTitulos(json.melhoresTitulos || []);
       setMelhoresDescricoes(json.melhoresDescricoes || []);
+      setTermosComResultado(json.termosComResultado || []);
+      setTermosTentados(json.termosTentados || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -257,6 +265,30 @@ function GarimpoConteudo() {
           {loading ? "Buscando..." : "Buscar"}
         </button>
       </div>
+
+      <label className="mt-3 flex items-center gap-2 text-sm text-zinc-600">
+        <input
+          type="checkbox"
+          checked={ampliar}
+          onChange={(e) => setAmpliar(e.target.checked)}
+          className="h-4 w-4 rounded border-zinc-300"
+        />
+        Ampliar automaticamente com termos parecidos (IA) quando achar pouco, sem sair do nicho
+      </label>
+
+      {resultados && termosComResultado.length > 0 && (
+        <div className="mt-4 rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+          Poucos resultados pra &quot;{searchTerms}&quot; — ampliamos automaticamente a busca com termos
+          parecidos (mesmo nicho) e também encontramos anúncios pra:{" "}
+          <strong>{termosComResultado.join(", ")}</strong>.
+        </div>
+      )}
+      {resultados && termosTentados.length > 0 && termosComResultado.length === 0 && (
+        <div className="mt-4 rounded-md bg-zinc-50 border border-zinc-200 px-4 py-3 text-sm text-zinc-500">
+          Poucos resultados pra &quot;{searchTerms}&quot; — tentamos ampliar com termos parecidos (
+          {termosTentados.join(", ")}), mas nenhum trouxe anúncios a mais.
+        </div>
+      )}
 
       {error && (
         <div className="mt-4 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
