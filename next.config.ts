@@ -9,7 +9,16 @@ const nextConfig: NextConfig = {
     "@ffmpeg-installer/ffmpeg",
     "@ffprobe-installer/ffprobe",
     "@napi-rs/canvas",
+    "puppeteer-core",
+    "@sparticuz/chromium",
   ],
+  // Os arquivos .br do Chromium (@sparticuz/chromium) são lidos em runtime
+  // via caminho de arquivo (não via require/import), então o rastreador de
+  // arquivos do Next não os inclui sozinho — sem isso a função na Vercel
+  // sobe sem o binário do Chromium e falha em produção.
+  outputFileTracingIncludes: {
+    "/api/variacoes/analisar-biblioteca/route": ["./node_modules/@sparticuz/chromium/bin/**"],
+  },
 };
 
 export default nextConfig;

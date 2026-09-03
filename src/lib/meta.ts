@@ -1,4 +1,6 @@
 import { env } from "./env";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 
 export interface AdLibraryAd {
   id: string;
@@ -153,27 +155,6 @@ export function extrairIdsDoLink(url: string): { adId: string | null; pageId: st
   return { adId, pageId };
 }
 
-function limparTextoRaspado(s: string): string {
-  return s
-    .replace(/\\u0026/g, "&")
-    .replace(/\\\//g, "/")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#0?39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .trim();
-}
-
-function conteudoDaMetaTag(html: string, propriedade: string): string | null {
-  const padrao1 = new RegExp(`<meta[^>]+(?:property|name)=["']${propriedade}["'][^>]*content=["']([^"']*)["']`, "i");
-  const m1 = html.match(padrao1);
-  if (m1) return limparTextoRaspado(m1[1]);
-  const padrao2 = new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${propriedade}["']`, "i");
-  const m2 = html.match(padrao2);
-  return m2 ? limparTextoRaspado(m2[1]) : null;
-}
-
 export interface RaspagemDoAnuncio {
   titulo?: string;
   descricao?: string;
@@ -181,49 +162,118 @@ export interface RaspagemDoAnuncio {
   midia?: { tipo: "video" | "imagem"; url: string };
 }
 
-function rasparHtmlDoAnuncio(html: string): RaspagemDoAnuncio {
-  const titulo = conteudoDaMetaTag(html, "og:title") || undefined;
-  const descricao = conteudoDaMetaTag(html, "og:description") || undefined;
-  const nomeDaPagina = conteudoDaMetaTag(html, "og:site_name") || undefined;
+/**
+ * Abre uma URL de renderização de anúncio da Meta (render_ad / o formato do
+ * campo ad_snapshot_url) num Chromium headless e lê o conteúdo já montado.
+ *
+ * IMPORTANTE: essa página não é HTML estático — o conteúdo (texto, imagem,
+ * vídeo) só existe depois que o JavaScript da própria Meta roda no
+ * navegador (confirmado testando: um fetch() simples devolve só uma casca
+ * vazia, sem nenhuma tag Open Graph e sem o vídeo — foi por isso que a
+ * primeira versão dessa função, baseada só em fetch + regex, nunca
+ * funcionava, pra nenhum anúncio). Por isso a gente abre a URL num Chromium
+ * headless (via puppeteer-core + @sparticuz/chromium, rodando dentro da
+ * própria função serverless), espera a página montar o conteúdo e lê o
+ * resultado do DOM já pronto. Confirmado funcionando sem precisar de login.
+ *
+ * Por ser fora do contrato oficial da API (é raspagem de uma página pensada
+ * pra humano, não um endpoint de dados), é sempre best-effort: pode não
+ * trazer nada, ou parar de funcionar se a Meta mudar o layout.
+ */
+async function abrirERasparAnuncio(url: string): Promise<RaspagemDoAnuncio | null> {
+  let browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null;
+  try {
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      executablePath: await chromium.executablePath(),
+      headless: true,
+    });
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    );
+    await page.setViewport({ width: 1280, height: 1400 });
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 25000 });
+    // Dá uma folga extra pro vídeo/imagem terminar de montar no DOM (às
+    // vezes finaliza um instante depois do "networkidle2").
+    await page
+      .waitForSelector('video, img[src*="scontent"]', { timeout: 6000 })
+      .catch(() => {});
 
-  let midia: RaspagemDoAnuncio["midia"];
-  const video = html.match(/https:[^"'\s\\]+?\.mp4[^"'\s\\]*/i);
-  if (video) {
-    midia = { tipo: "video", url: limparTextoRaspado(video[0]) };
-  } else {
-    const imagem = html.match(/https:\/\/scontent[^"'\s\\]+?\.(?:jpg|jpeg|png)[^"'\s\\]*/i);
-    if (imagem) midia = { tipo: "imagem", url: limparTextoRaspado(imagem[0]) };
+    const dados = await page.evaluate(() => {
+      const bodyText = document.body.innerText || "";
+      const linhas = bodyText
+        .split("\n")
+        .map((l) => l.replace(/​/g, "").trim())
+        .filter(Boolean);
+
+      const nomeDaPagina = linhas[0] || "";
+      // A "Identificação da biblioteca: 123..." (ou equivalente em outro
+      // idioma) sempre termina com um número longo — usa isso como marco
+      // pra saber onde o texto do anúncio começa, sem depender do idioma.
+      const idxId = linhas.findIndex((l) => /\d{8,}\s*$/.test(l) && l.length < 80);
+      // A duração do vídeo ("0:00 / 0:15") é um marco confiável de onde o
+      // texto principal termina, também independente de idioma.
+      const idxDuracao = linhas.findIndex((l) => /^\d+:\d{2}\s*\/\s*\d+:\d{2}$/.test(l));
+
+      const inicio = idxId >= 0 ? idxId + 1 : 2;
+      const fim = idxDuracao >= 0 ? idxDuracao : Math.min(inicio + 4, linhas.length);
+      const textoPrincipal = linhas
+        .slice(inicio, fim)
+        .filter((l) => l.toLowerCase() !== "menu")
+        .join(" ")
+        .trim();
+
+      const video = document.querySelector("video") as HTMLVideoElement | null;
+      const videoSrc = video?.currentSrc || video?.src || null;
+
+      const imagens = Array.from(document.querySelectorAll("img"))
+        .filter((img) => /scontent/i.test((img as HTMLImageElement).src))
+        .sort((a, b) => {
+          const ai = a as HTMLImageElement;
+          const bi = b as HTMLImageElement;
+          return bi.naturalWidth * bi.naturalHeight - ai.naturalWidth * ai.naturalHeight;
+        });
+      const imgSrc = (imagens[0] as HTMLImageElement | undefined)?.src || null;
+
+      return { nomeDaPagina, textoPrincipal, videoSrc, imgSrc };
+    });
+
+    await browser.close();
+    browser = null;
+
+    if (!dados.textoPrincipal && !dados.videoSrc && !dados.imgSrc) return null;
+
+    const midia: RaspagemDoAnuncio["midia"] = dados.videoSrc
+      ? { tipo: "video", url: dados.videoSrc }
+      : dados.imgSrc
+        ? { tipo: "imagem", url: dados.imgSrc }
+        : undefined;
+
+    return {
+      titulo: undefined,
+      descricao: dados.textoPrincipal || undefined,
+      nomeDaPagina: dados.nomeDaPagina || undefined,
+      midia,
+    };
+  } catch {
+    return null;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
   }
-
-  return { titulo, descricao, nomeDaPagina, midia };
 }
 
 /**
  * Busca (best-effort) os dados de UM anúncio específico direto pelo ID —
- * sem precisar saber a página dele — usando o endpoint público de
- * renderização de anúncio da própria Meta (o mesmo formato do campo
- * ad_snapshot_url que a Ad Library API devolve:
- * "https://www.facebook.com/ads/archive/render_ad/?id=...&access_token=...").
- * Diferente da busca por palavra-chave/página (ads_archive), esse endpoint
- * aceita o ID isolado — mas não é um campo estruturado da API, então a
- * gente lê o HTML dele (tags Open Graph pro texto, regex pra mídia) em vez
- * de JSON. Por ser fora do contrato oficial da API, é sempre best-effort:
- * pode não trazer nada, ou parar de funcionar se a Meta mudar essa página.
+ * sem precisar saber a página dele — montando a URL de renderização
+ * (mesmo formato do campo ad_snapshot_url que a Ad Library API devolve:
+ * "https://www.facebook.com/ads/archive/render_ad/?id=...&access_token=...")
+ * e raspando o resultado (ver abrirERasparAnuncio).
  */
 export async function buscarAnuncioRenderizado(adId: string): Promise<RaspagemDoAnuncio | null> {
   const token = env.metaAccessToken();
   const url = `https://www.facebook.com/ads/archive/render_ad/?id=${encodeURIComponent(adId)}&access_token=${encodeURIComponent(token)}`;
-  try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; PubViewsTool/1.0)" },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    return rasparHtmlDoAnuncio(html);
-  } catch {
-    return null;
-  }
+  return abrirERasparAnuncio(url);
 }
 
 // Países usados pra tentar achar o anúncio específico dentro da página (a
@@ -304,15 +354,6 @@ export async function buscarAnuncioNaPagina(adId: string, pageId: string): Promi
 export async function extrairMidiaDoSnapshot(
   snapshotUrl: string
 ): Promise<{ tipo: "video" | "imagem"; url: string } | null> {
-  try {
-    const res = await fetch(snapshotUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; PubViewsTool/1.0)" },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) return null;
-    const html = await res.text();
-    return rasparHtmlDoAnuncio(html).midia ?? null;
-  } catch {
-    return null;
-  }
+  const raspagem = await abrirERasparAnuncio(snapshotUrl);
+  return raspagem?.midia ?? null;
 }
