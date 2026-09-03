@@ -65,10 +65,13 @@ export default function VariacoesPage() {
     try {
       // Sobe o arquivo direto do navegador pro Vercel Blob — não passa pelo
       // corpo de nenhuma função nossa, então não esbarra no limite de ~4.5MB
-      // de requisição das Vercel Functions.
+      // de requisição das Vercel Functions. abortSignal garante que, se esse
+      // upload travar (rede, etc.), a gente não fica preso aqui pra sempre —
+      // sai com um erro claro em vez de "Analisando vídeo..." infinito.
       const resultado = await upload(file.name, file, {
         access: "public",
         handleUploadUrl: "/api/variacoes/video-upload",
+        abortSignal: AbortSignal.timeout(60000),
       });
 
       // Timeout no próprio navegador — sem isso, se a resposta nunca chegar
