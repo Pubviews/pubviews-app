@@ -48,7 +48,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Falha ao buscar o vídeo original enviado." }, { status: 502 });
       }
       const videoBuffer = Buffer.from(await respostaVideo.arrayBuffer());
-      await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay, saidaPath });
+      // "conter" (sem cortar): o vídeo original pode ter texto/CTA já
+      // embutido na imagem — cortar as bordas (modo padrão) cortaria esse
+      // texto junto, deixando o resultado ruim (bug relatado pelo usuário).
+      await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay, saidaPath, ajusteDeQuadro: "conter" });
     } else {
       // O Pexels indexa o catálogo majoritariamente em inglês — buscar com a
       // descrição em português (ex: "curso de empilhadeira") costuma trazer

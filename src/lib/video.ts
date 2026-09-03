@@ -127,17 +127,36 @@ async function corMediaRegiaoDoBotao(bufferImagem: Buffer): Promise<CorRgb> {
   return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
 }
 
+// Contraste mínimo (razão WCAG) pra uma cor ser considerada "legível o
+// suficiente" contra o fundo. Abaixo disso a cor fica de fora da disputa.
+const CONTRASTE_MINIMO = 2.2;
+
+/**
+ * Escolhe uma cor do CTA entre as que têm contraste suficiente contra o
+ * fundo, sorteando entre elas — em vez de sempre pegar a de MAIOR contraste.
+ *
+ * Por quê: como as cores da paleta têm luminâncias bem diferentes entre si
+ * (amarelo é a mais "clara" de longe), e a maioria dos fundos de foto/vídeo
+ * cai numa faixa de luminância média, a cor de luminância mais extrema
+ * (amarelo) praticamente sempre vencia o cálculo de contraste — o botão
+ * ficava sempre amarelo, o oposto da variedade que o objetivo aqui era ter.
+ * Sortear entre as opções "boas o bastante" mantém a legibilidade (nenhuma
+ * cor com contraste ruim é usada) e devolve a variação visual entre os
+ * criativos gerados.
+ */
 function escolherCorDeMaiorContraste(corDeFundo: CorRgb): OpcaoCorBotao {
-  let melhor = PALETA_CTA[0];
-  let melhorContraste = -1;
-  for (const opcao of PALETA_CTA) {
-    const contraste = razaoContraste(opcao.bg, corDeFundo);
-    if (contraste > melhorContraste) {
-      melhorContraste = contraste;
-      melhor = opcao;
-    }
-  }
-  return melhor;
+  const comContraste = PALETA_CTA.map((opcao) => ({
+    opcao,
+    contraste: razaoContraste(opcao.bg, corDeFundo),
+  })).sort((a, b) => b.contraste - a.contraste);
+
+  const qualificadas = comContraste.filter((c) => c.contraste >= CONTRASTE_MINIMO);
+  // Se nenhuma bater o mínimo (fundo muito "do meio termo"), usa as 2 melhores
+  // mesmo assim — ainda é melhor que travar numa cor fixa.
+  const candidatas = qualificadas.length > 0 ? qualificadas : comContraste.slice(0, 2);
+
+  const escolhida = candidatas[Math.floor(Math.random() * candidatas.length)];
+  return escolhida.opcao;
 }
 
 /**
@@ -220,6 +239,16 @@ interface MontarVideoOpts {
   /** "vertical" (1080x1920, padrão) ou "quadrado" (1080x1080). */
   formatoVideo?: FormatoVideo;
 }
+
+/**
+ * Como encaixar o vídeo de origem no formato de saída:
+ * - "cobrir" (padrão): preenche o quadro todo, cortando as bordas que sobram
+ *   (bom pra vídeo de banco de imagens, onde não tem nada importante nas bordas).
+ * - "conter": encaixa o vídeo inteiro sem cortar nada, com fundo desfocado
+ *   preenchendo o resto (bom pro vídeo ORIGINAL do usuário, que pode ter
+ *   texto/CTA já embutido na imagem — cortar cortaria esse texto também).
+ */
+export type AjusteDeQuadro = "cobrir" | "conter";
 
 /**
  * Prepara o PNG do botão de CTA, escolhendo a cor de maior contraste contra
@@ -308,10 +337,11 @@ export async function montarVideoComImagem(
  * cortando/repetindo o clipe para bater com a duração do áudio.
  */
 export async function montarVideoComVideo(
-  opts: MontarVideoOpts & { videoBuffer: Buffer }
+  opts: MontarVideoOpts & { videoBuffer: Buffer; ajusteDeQuadro?: AjusteDeQuadro }
 ): Promise<void> {
   const { largura: W, altura: H } = FORMATOS[opts.formatoVideo ?? "vertical"];
   const margemInferior = Math.round(H * MARGEM_INFERIOR_PROPORCAO);
+  const ajuste = opts.ajusteDeQuadro ?? "cobrir";
 
   const vidPath = tmpFile("mp4");
   const audioPath = tmpFile("mp3");
@@ -323,9 +353,19 @@ export async function montarVideoComVideo(
 
   const duration = await getAudioDuration(audioPath);
 
-  const filtros = [
-    `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[cropped]`,
-  ];
+  const filtros =
+    ajuste === "conter"
+      ? [
+          // Fundo: preenche o quadro todo (cortando) e desfoca, só pra não
+          // deixar barras pretas feias nas laterais/topo-base.
+          `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},gblur=sigma=30[fundo]`,
+          // Primeiro plano: o vídeo INTEIRO, sem cortar nada (encolhe pra caber).
+          `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease[frente]`,
+          `[fundo][frente]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,setpts=PTS-STARTPTS[cropped]`,
+        ]
+      : [
+          `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[cropped]`,
+        ];
   let lastLabel = "cropped";
 
   if (botaoPath) {

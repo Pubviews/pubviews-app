@@ -76,7 +76,7 @@ Responda em JSON puro, um array de strings, exemplo: ["texto variação 1", "tex
  * Gera uma imagem realista (bytes PNG/JPEG em base64) a partir de uma descrição textual.
  */
 export async function gerarImagem(descricao: string): Promise<{ base64: string; mimeType: string }> {
-  const prompt = `Fotografia realista, estilo anúncio de redes sociais, alta qualidade, iluminação natural: ${descricao}. Sem texto sobreposto, sem marca d'água, sem logotipos.`;
+  const prompt = `Fotografia realista, estilo anúncio de redes sociais, alta qualidade, iluminação natural: ${descricao}. Sem texto sobreposto, sem marca d'água, sem logotipos. Se a cena mostrar naturalmente algum texto legível (tela de celular, letreiro, embalagem, notificação etc.), esse texto deve estar em INGLÊS, nunca em português — o anúncio final é em inglês.`;
 
   const json = await callGemini(IMAGE_MODEL, {
     contents: [{ role: "user", parts: [{ text: prompt }] }],

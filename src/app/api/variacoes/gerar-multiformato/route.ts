@@ -64,6 +64,9 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Falha ao buscar o vídeo original enviado." }, { status: 502 });
       }
       const videoBuffer = Buffer.from(await respostaVideo.arrayBuffer());
+      // "conter" (sem cortar): o vídeo original pode ter texto/CTA já
+      // embutido na imagem — cortar as bordas (modo padrão) cortaria esse
+      // texto junto, deixando o resultado ruim (bug relatado pelo usuário).
       await Promise.all([
         montarVideoComVideo({
           audioBuffer,
@@ -71,6 +74,7 @@ export async function POST(req: NextRequest) {
           textoOverlay,
           saidaPath: saidaVertical,
           formatoVideo: "vertical",
+          ajusteDeQuadro: "conter",
         }),
         montarVideoComVideo({
           audioBuffer,
@@ -78,6 +82,7 @@ export async function POST(req: NextRequest) {
           textoOverlay,
           saidaPath: saidaQuadrado,
           formatoVideo: "quadrado",
+          ajusteDeQuadro: "conter",
         }),
       ]);
     } else {

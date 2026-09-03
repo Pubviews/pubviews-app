@@ -168,7 +168,10 @@ export default function VariacoesPage() {
 
   async function gerarVideo(idx: number) {
     const card = cards[idx];
-    atualizarCard(idx, { gerando: true, erro: null });
+    // Limpa o erro dos DOIS botões (vertical e "2 formatos") — são o mesmo
+    // card, e um erro antigo de uma tentativa no outro botão não pode ficar
+    // preso na tela depois que essa tentativa aqui deu certo.
+    atualizarCard(idx, { gerando: true, erro: null, erroDuplo: null });
     try {
       const res = await fetch("/api/variacoes/gerar", {
         method: "POST",
@@ -189,7 +192,7 @@ export default function VariacoesPage() {
 
   async function gerarVideoDuploFormato(idx: number) {
     const card = cards[idx];
-    atualizarCard(idx, { gerandoDuplo: true, erroDuplo: null });
+    atualizarCard(idx, { gerandoDuplo: true, erroDuplo: null, erro: null });
     try {
       const res = await fetch("/api/variacoes/gerar-multiformato", {
         method: "POST",
