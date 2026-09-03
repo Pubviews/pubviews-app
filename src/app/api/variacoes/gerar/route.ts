@@ -44,9 +44,9 @@ export async function POST(req: NextRequest) {
       const imagemBuffer = Buffer.from(imagem.base64, "base64");
       await montarVideoComImagem({ audioBuffer, imagemBuffer, textoOverlay, saidaPath });
     } else if (formato === "video_original") {
-      // Reaproveita o vídeo original enviado pelo usuário como visual — a
-      // narração e o CTA são os novos, a cena continua sendo a do criativo
-      // vencedor de verdade (não busca nada no Pexels nem gera imagem).
+      // Reaproveita o vídeo original enviado pelo usuário como visual — só a
+      // narração é nova, a cena continua sendo a do criativo vencedor de
+      // verdade (não busca nada no Pexels nem gera imagem).
       const respostaVideo = await fetch(videoOriginalUrl!);
       if (!respostaVideo.ok) {
         return NextResponse.json({ error: "Falha ao buscar o vídeo original enviado." }, { status: 502 });
@@ -55,7 +55,10 @@ export async function POST(req: NextRequest) {
       // "conter" (sem cortar): o vídeo original pode ter texto/CTA já
       // embutido na imagem — cortar as bordas (modo padrão) cortaria esse
       // texto junto, deixando o resultado ruim (bug relatado pelo usuário).
-      await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay, saidaPath, ajusteDeQuadro: "conter" });
+      // Nunca desenha o botão de overlay aqui: o vídeo original já tem o
+      // próprio CTA embutido na imagem, e sobrepor outro botão em cima
+      // ficava com os dois se cruzando (outro bug relatado pelo usuário).
+      await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay: undefined, saidaPath, ajusteDeQuadro: "conter" });
     } else {
       // O Pexels indexa o catálogo majoritariamente em inglês — buscar com a
       // descrição em português (ex: "curso de empilhadeira") costuma trazer

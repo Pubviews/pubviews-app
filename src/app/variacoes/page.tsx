@@ -161,7 +161,11 @@ export default function VariacoesPage() {
       texto: card.texto,
       formato: card.formato,
       descricaoVisual: card.descricaoVisual,
-      textoOverlay: card.textoOverlay || undefined,
+      // No vídeo original o CTA já vem embutido na imagem — não manda texto
+      // de overlay nesse caso (mesmo que o card tenha um valor de uma troca
+      // de formato anterior), pra nunca desenhar um botão duplicado em cima
+      // do botão que já existe no vídeo.
+      textoOverlay: card.formato === "video_original" ? undefined : card.textoOverlay || undefined,
       videoOriginalUrl: card.formato === "video_original" ? videoOriginalUrl || undefined : undefined,
     };
   }
@@ -345,7 +349,9 @@ export default function VariacoesPage() {
               {card.formato === "video_original" && (
                 <p className="mt-1 text-xs text-zinc-500">
                   A IA achou que a cena do seu vídeo ainda combina com esse roteiro — vai usar o
-                  vídeo enviado como visual, só trocando narração e CTA.
+                  vídeo enviado como visual, só trocando a narração. O vídeo original já tem o
+                  próprio CTA embutido na imagem, então não adicionamos outro botão em cima (pra
+                  não sobrepor).
                 </p>
               )}
 
@@ -362,15 +368,17 @@ export default function VariacoesPage() {
                 </div>
               )}
 
-              <div className="mt-3">
-                <label className="block text-xs font-medium text-zinc-500">Texto sobreposto (opcional, ex. CTA)</label>
-                <input
-                  value={card.textoOverlay}
-                  onChange={(e) => atualizarCard(idx, { textoOverlay: e.target.value })}
-                  placeholder="Get started >"
-                  className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
-                />
-              </div>
+              {card.formato !== "video_original" && (
+                <div className="mt-3">
+                  <label className="block text-xs font-medium text-zinc-500">Texto sobreposto (opcional, ex. CTA)</label>
+                  <input
+                    value={card.textoOverlay}
+                    onChange={(e) => atualizarCard(idx, { textoOverlay: e.target.value })}
+                    placeholder="Get started >"
+                    className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                  />
+                </div>
+              )}
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                 <button

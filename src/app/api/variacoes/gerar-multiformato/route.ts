@@ -71,11 +71,14 @@ export async function POST(req: NextRequest) {
       // "conter" (sem cortar): o vídeo original pode ter texto/CTA já
       // embutido na imagem — cortar as bordas (modo padrão) cortaria esse
       // texto junto, deixando o resultado ruim (bug relatado pelo usuário).
+      // Nunca desenha o botão de overlay aqui: o vídeo original já tem o
+      // próprio CTA embutido na imagem, e sobrepor outro botão em cima
+      // ficava com os dois se cruzando (outro bug relatado pelo usuário).
       await Promise.all([
         montarVideoComVideo({
           audioBuffer,
           videoBuffer,
-          textoOverlay,
+          textoOverlay: undefined,
           saidaPath: saidaVertical,
           formatoVideo: "vertical",
           ajusteDeQuadro: "conter",
@@ -83,7 +86,7 @@ export async function POST(req: NextRequest) {
         montarVideoComVideo({
           audioBuffer,
           videoBuffer,
-          textoOverlay,
+          textoOverlay: undefined,
           saidaPath: saidaQuadrado,
           formatoVideo: "quadrado",
           ajusteDeQuadro: "conter",
