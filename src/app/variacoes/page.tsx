@@ -71,10 +71,14 @@ export default function VariacoesPage() {
         handleUploadUrl: "/api/variacoes/video-upload",
       });
 
+      // Timeout no próprio navegador — sem isso, se a resposta nunca chegar
+      // (conexão travada, aba que ficou inativa, etc.) a tela fica presa em
+      // "Analisando vídeo..." pra sempre, sem erro nenhum aparecer.
       const res = await fetch("/api/variacoes/analisar-video", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ videoUrl: resultado.url, mimeType: file.type || "video/mp4" }),
+        signal: AbortSignal.timeout(170000),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Erro ao analisar o vídeo.");
@@ -85,7 +89,14 @@ export default function VariacoesPage() {
       setReferencia(json.referencia || "");
       if (json.nicho) setNicho(json.nicho);
     } catch (err) {
-      setErroAnaliseVideo(err instanceof Error ? err.message : String(err));
+      const timeout = err instanceof Error && err.name === "TimeoutError";
+      setErroAnaliseVideo(
+        timeout
+          ? "A análise demorou demais e foi cancelada. Tente de novo — se persistir, tente com um vídeo mais curto."
+          : err instanceof Error
+            ? err.message
+            : String(err)
+      );
     } finally {
       setAnalisandoVideo(false);
     }

@@ -8,13 +8,26 @@ const BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const TEXT_MODEL = process.env.GOOGLE_TEXT_MODEL || "gemini-3.6-flash";
 const IMAGE_MODEL = process.env.GOOGLE_IMAGE_MODEL || "gemini-2.5-flash-image";
 
-async function callGemini(model: string, body: unknown) {
+async function callGemini(model: string, body: unknown, timeoutMs = 45000) {
   const key = env.googleAiApiKey();
-  const res = await fetch(`${BASE}/${model}:generateContent?key=${key}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/${model}:generateContent?key=${key}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      // Sem isso, se a chamada pra Gemini travar/demorar demais, a função
+      // fica presa até o Vercel matar a execução na marra (e às vezes nem
+      // isso chega limpo até o navegador) — com o timeout aqui a gente
+      // sempre devolve um erro claro pro usuário bem antes disso.
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "TimeoutError") {
+      throw new Error(`A IA (Gemini) demorou mais de ${Math.round(timeoutMs / 1000)}s para responder. Tente de novo.`);
+    }
+    throw err;
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`Gemini (${model}) erro ${res.status}: ${text}`);
@@ -97,15 +110,22 @@ Analise o vídeo anexado, que é um criativo de anúncio vencedor, e responda em
 
 Responda em JSON puro, exemplo: {"referencia": "...", "nicho": "...", "descricaoVisual": "..."}. Nada além do JSON.`;
 
-  const json = await callGemini(TEXT_MODEL, {
-    contents: [
-      {
-        role: "user",
-        parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }],
-      },
-    ],
-    generationConfig: { temperature: 0.3 },
-  });
+  // Analisar vídeo demora bem mais que os outros usos do Gemini (a IA
+  // "assiste" o vídeo inteiro) — timeout maior, alinhado ao maxDuration
+  // dessa rota (veja src/app/api/variacoes/analisar-video/route.ts).
+  const json = await callGemini(
+    TEXT_MODEL,
+    {
+      contents: [
+        {
+          role: "user",
+          parts: [{ inlineData: { mimeType, data: base64 } }, { text: prompt }],
+        },
+      ],
+      generationConfig: { temperature: 0.3 },
+    },
+    100000
+  );
 
   const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
   const cleaned = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "");
