@@ -217,16 +217,21 @@ async function abrirERasparAnuncio(url: string): Promise<RaspagemDoAnuncio | nul
       const idxDuracao = linhas.findIndex((l) => /^\d+:\d{2}\s*\/\s*\d+:\d{2}$/.test(l));
 
       // Alguns elementos de interface (botão de menu "...", etc.) têm texto
-      // acessível que entra no innerText mesmo sem aparecer visualmente —
-      // filtra os mais comuns pra não poluir o texto do anúncio.
+      // acessível que entra no innerText mesmo sem aparecer visualmente — às
+      // vezes até colado na mesma linha do texto do anúncio, sem quebra de
+      // linha. Filtra as linhas 100% ruído e remove o resto como prefixo.
       const RUIDO_DE_INTERFACE = ["menu", "open dropdown", "abrir menu", "more options"];
       const inicio = idxId >= 0 ? idxId + 1 : 2;
       const fim = idxDuracao >= 0 ? idxDuracao : Math.min(inicio + 4, linhas.length);
-      const textoPrincipal = linhas
+      let textoPrincipal = linhas
         .slice(inicio, fim)
         .filter((l) => !RUIDO_DE_INTERFACE.includes(l.toLowerCase()))
         .join(" ")
         .trim();
+      for (const ruido of RUIDO_DE_INTERFACE) {
+        const padrao = new RegExp(`^${ruido}\\s*`, "i");
+        textoPrincipal = textoPrincipal.replace(padrao, "").trim();
+      }
 
       const video = document.querySelector("video") as HTMLVideoElement | null;
       const videoSrc = video?.currentSrc || video?.src || null;
