@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 interface GarimpoResult {
   page_id: string;
   page_name: string;
+  site_name: string | null;
   total_active_ads: number;
   max_days_active: number;
   atende_duplicacao_3x: boolean;
@@ -118,6 +119,7 @@ function GarimpoConteudo() {
             <thead>
               <tr className="border-b border-zinc-200 text-left text-zinc-500">
                 <th className="px-4 py-3">Página</th>
+                <th className="px-4 py-3">Site</th>
                 <th className="px-4 py-3">Anúncios ativos</th>
                 <th className="px-4 py-3">Dias ativo (máx.)</th>
                 <th className="px-4 py-3">3+ duplicações</th>
@@ -130,6 +132,7 @@ function GarimpoConteudo() {
               {resultados.map((r) => (
                 <tr key={r.page_id} className="border-b border-zinc-100 last:border-0">
                   <td className="px-4 py-3 font-medium">{r.page_name}</td>
+                  <td className="px-4 py-3 text-zinc-600">{r.site_name || "—"}</td>
                   <td className="px-4 py-3">{r.total_active_ads}</td>
                   <td className="px-4 py-3">{r.max_days_active}</td>
                   <td className="px-4 py-3">{r.atende_duplicacao_3x ? "Sim" : "Não"}</td>
@@ -153,7 +156,7 @@ function GarimpoConteudo() {
               ))}
               {resultados.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-6 text-center text-zinc-500">
+                  <td colSpan={8} className="px-4 py-6 text-center text-zinc-500">
                     Nenhum resultado para esse termo/países.
                   </td>
                 </tr>

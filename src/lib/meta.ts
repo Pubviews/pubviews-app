@@ -8,11 +8,18 @@ export interface AdLibraryAd {
   page_name: string;
   ad_delivery_start_time: string;
   ad_snapshot_url: string;
+  // Domínio/site mostrado no rodapé do anúncio (ex: "minhaescola.com.br") —
+  // vem como array porque anúncios diferentes da mesma página podem apontar
+  // pra domínios diferentes; a Meta às vezes não devolve nada aqui.
+  ad_creative_link_captions?: string[];
 }
 
 export interface GarimpoResult {
   page_id: string;
   page_name: string;
+  // Domínio mais usado entre os anúncios ativos dessa página — null quando
+  // a Meta não devolveu esse dado pra nenhum anúncio da página.
+  site_name: string | null;
   total_active_ads: number;
   max_days_active: number;
   atende_duplicacao_3x: boolean;
@@ -20,6 +27,26 @@ export interface GarimpoResult {
   status: "CANDIDATO FORTE" | "CANDIDATO" | "DESCARTAR";
   link_biblioteca: string;
   ads: { id: string; days_active: number; snapshot_url: string }[];
+}
+
+/**
+ * Entre os domínios vistos nos anúncios de uma página (pode variar de
+ * anúncio pra anúncio), escolhe o mais frequente — o que representa melhor
+ * "o site dessa página" pro usuário decidir se conhece ou não.
+ */
+function siteMaisFrequente(captions: string[]): string | null {
+  if (captions.length === 0) return null;
+  const contagem = new Map<string, number>();
+  for (const c of captions) contagem.set(c, (contagem.get(c) ?? 0) + 1);
+  let melhor: string | null = null;
+  let melhorContagem = 0;
+  for (const [site, n] of contagem.entries()) {
+    if (n > melhorContagem) {
+      melhor = site;
+      melhorContagem = n;
+    }
+  }
+  return melhor;
 }
 
 const GRAPH_VERSION = "v21.0";
@@ -51,7 +78,7 @@ export async function searchAdLibrary(params: {
   url.searchParams.set("ad_reached_countries", JSON.stringify(params.countries));
   url.searchParams.set(
     "fields",
-    "id,page_id,page_name,ad_delivery_start_time,ad_snapshot_url"
+    "id,page_id,page_name,ad_delivery_start_time,ad_snapshot_url,ad_creative_link_captions"
   );
   url.searchParams.set("limit", String(Math.min(limit, 200)));
 
@@ -94,9 +121,12 @@ export async function searchAdLibrary(params: {
     if (atende30 && atendeDup3x) status = "CANDIDATO FORTE";
     else if (atende30 || atendeDup3x) status = "CANDIDATO";
 
+    const captions = ads.flatMap((a) => a.ad_creative_link_captions ?? []).filter(Boolean);
+
     results.push({
       page_id: pageId,
       page_name: ads[0].page_name,
+      site_name: siteMaisFrequente(captions),
       total_active_ads: ads.length,
       max_days_active: maxDays,
       atende_duplicacao_3x: atendeDup3x,
