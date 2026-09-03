@@ -123,6 +123,17 @@ export async function searchAdLibrary(params: {
 
     const captions = ads.flatMap((a) => a.ad_creative_link_captions ?? []).filter(Boolean);
 
+    // "Criativo campeão": entre os anúncios ativos dessa página, o mais
+    // antigo (maior tempo no ar) — se a página tem várias cópias do mesmo
+    // anúncio rodando, a mais antiga é a que já provou que funciona, então
+    // é essa que vira o link de referência (em vez de mandar pra lista geral
+    // de anúncios da página, que cai no filtro de país errado e não mostra
+    // qual anúncio específico bateu os critérios).
+    const campeao = withDays.reduce(
+      (melhor, atual) => (atual.days_active > melhor.days_active ? atual : melhor),
+      withDays[0]
+    );
+
     results.push({
       page_id: pageId,
       page_name: ads[0].page_name,
@@ -132,7 +143,9 @@ export async function searchAdLibrary(params: {
       atende_duplicacao_3x: atendeDup3x,
       atende_30_dias: atende30,
       status,
-      link_biblioteca: `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&search_type=page&view_all_page_id=${pageId}`,
+      link_biblioteca:
+        campeao?.snapshot_url ||
+        `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&search_type=page&view_all_page_id=${pageId}`,
       ads: withDays,
     });
   }
