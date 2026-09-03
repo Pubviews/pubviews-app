@@ -4,12 +4,14 @@ import { useState, type ChangeEvent } from "react";
 import { upload } from "@vercel/blob/client";
 
 type Formato = "imagem" | "video" | "video_original";
+type AnimacaoCta = "estatico" | "pulsar" | "piscar";
 
 interface CardVariacao {
   texto: string;
   formato: Formato;
   descricaoVisual: string;
   textoOverlay: string;
+  animacaoCta: AnimacaoCta;
   gerando: boolean;
   erro: string | null;
   videoUrl: string | null;
@@ -240,11 +242,15 @@ export default function VariacoesPage() {
       if (!res.ok) throw new Error(json.error || "Erro ao gerar roteiros.");
 
       const variacoes: { texto: string; usarVisualOriginal: boolean; descricaoVisual: string }[] = json.variacoes;
-      const novosCards: CardVariacao[] = variacoes.map((v) => ({
+      const novosCards: CardVariacao[] = variacoes.map((v, i) => ({
         texto: v.texto,
         formato: v.usarVisualOriginal && videoOriginalUrl ? "video_original" : "imagem",
         descricaoVisual: v.descricaoVisual || nicho || referencia,
         textoOverlay: "",
+        // Alterna pulsar/piscar entre as variações por padrão — assim o lote
+        // já sai variado (dá pra ver qual anima melhor pra esse criativo),
+        // com o seletor abaixo pra trocar manualmente se quiser.
+        animacaoCta: i % 2 === 0 ? "pulsar" : "piscar",
         gerando: false,
         erro: null,
         videoUrl: null,
@@ -279,6 +285,7 @@ export default function VariacoesPage() {
       // de formato anterior), pra nunca desenhar um botão duplicado em cima
       // do botão que já existe no vídeo.
       textoOverlay: card.formato === "video_original" ? undefined : card.textoOverlay || undefined,
+      animacaoCta: card.formato === "video_original" ? undefined : card.animacaoCta,
       videoOriginalUrl: card.formato === "video_original" ? videoOriginalUrl || undefined : undefined,
       // Só pra ficar salvo junto no histórico (não muda a geração em si).
       nicho: nicho || undefined,
@@ -563,14 +570,30 @@ export default function VariacoesPage() {
               )}
 
               {card.formato !== "video_original" && (
-                <div className="mt-3">
-                  <label className="block text-xs font-medium text-zinc-500">Texto sobreposto (opcional, ex. CTA)</label>
-                  <input
-                    value={card.textoOverlay}
-                    onChange={(e) => atualizarCard(idx, { textoOverlay: e.target.value })}
-                    placeholder="Get started >"
-                    className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
-                  />
+                <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-zinc-500">Texto sobreposto (opcional, ex. CTA)</label>
+                    <input
+                      value={card.textoOverlay}
+                      onChange={(e) => atualizarCard(idx, { textoOverlay: e.target.value })}
+                      placeholder="Get started >"
+                      className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  {card.textoOverlay && (
+                    <div className="sm:w-44">
+                      <label className="block text-xs font-medium text-zinc-500">Animação do botão</label>
+                      <select
+                        value={card.animacaoCta}
+                        onChange={(e) => atualizarCard(idx, { animacaoCta: e.target.value as AnimacaoCta })}
+                        className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="pulsar">Pulsar</option>
+                        <option value="piscar">Piscar</option>
+                        <option value="estatico">Sem animação</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
               )}
 

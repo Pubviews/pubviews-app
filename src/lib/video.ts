@@ -238,6 +238,8 @@ interface MontarVideoOpts {
   saidaPath: string;
   /** "vertical" (1080x1920, padrão) ou "quadrado" (1080x1080). */
   formatoVideo?: FormatoVideo;
+  /** Animação do botão de CTA — "estatico" (padrão) quando não informado. */
+  animacaoCta?: AnimacaoCta;
 }
 
 /**
@@ -250,15 +252,54 @@ interface MontarVideoOpts {
  */
 export type AjusteDeQuadro = "cobrir" | "conter";
 
+// "estatico" (padrão de antes): botão parado, sem nenhum movimento.
+// "pulsar": cresce e volta ao tamanho normal, num ciclo suave (efeito de
+// "batimento") — chama atenção sem ficar irritante.
+// "piscar": a opacidade oscila entre bem visível e mais apagado — pisca,
+// sem nunca sumir de vez (evita parecer um bug).
+export type AnimacaoCta = "estatico" | "pulsar" | "piscar";
+
+// FPS da animação do botão em si (independente do fps do vídeo final — o
+// filtro overlay do ffmpeg segura o frame mais recente até o próximo PTS
+// chegar, então não precisa bater com o fps do vídeo pra ficar suave).
+const BOTAO_ANIMACAO_FPS = 20;
+// Quanto o botão cresce no pico do "pulsar" (12% maior que o tamanho normal).
+const PULSAR_ESCALA_MAX = 0.12;
+// Duração de um ciclo completo de cada animação, em segundos.
+const PULSAR_PERIODO_S = 1.0;
+const PISCAR_PERIODO_S = 0.8;
+// Opacidade mínima no fundo do "piscar" (nunca chega a sumir de vez).
+const PISCAR_OPACIDADE_MIN = 0.4;
+
+interface EntradaDeBotao {
+  /** Caminho pra usar como -i do ffmpeg: um PNG único (estático) ou um padrão de sequência (animado). */
+  inputPath: string;
+  /** Opções de input do ffmpeg específicas dessa entrada (ex: "-loop 1" ou "-framerate 20"). */
+  inputOptions: string[];
+  /**
+   * Quanto subtrair da posição vertical de overlay calculada pro botão
+   * estático, pra compensar a folga extra do canvas (só o "pulsar" precisa
+   * de folga pro botão crescer sem cortar) — assim a base do botão fica
+   * sempre alinhada com a mesma margem, animado ou não.
+   */
+  overlayYOffset: number;
+  /** Pasta de frames a apagar no final (só quando for uma sequência animada). */
+  dirParaLimpar: string | null;
+}
+
 /**
- * Prepara o PNG do botão de CTA, escolhendo a cor de maior contraste contra
- * uma amostra do criativo (imagem estática ou frame do vídeo). Se a amostra
- * não estiver disponível por algum motivo, cai no preto como antes.
+ * Prepara a entrada de ffmpeg do botão de CTA — um PNG único (parado) ou uma
+ * sequência de PNGs (animado, "pulsar"/"piscar") cobrindo a duração inteira
+ * do vídeo — escolhendo a cor de maior contraste contra uma amostra do
+ * criativo (imagem estática ou frame do vídeo). Se a amostra não estiver
+ * disponível por algum motivo, cai no preto como antes.
  */
-async function prepararBotao(
+async function prepararEntradaBotao(
   textoOverlay: string | undefined,
-  amostraParaCor: Buffer | null
-): Promise<string | null> {
+  amostraParaCor: Buffer | null,
+  animacao: AnimacaoCta,
+  duracaoSegundos: number
+): Promise<EntradaDeBotao | null> {
   if (!textoOverlay) return null;
 
   let corEscolhida = COR_FALLBACK;
@@ -271,9 +312,70 @@ async function prepararBotao(
     }
   }
 
-  const botaoPath = tmpFile("png");
-  await fs.writeFile(botaoPath, renderBotaoPng(textoOverlay, corEscolhida.hex, corEscolhida.texto));
-  return botaoPath;
+  const botaoBuffer = renderBotaoPng(textoOverlay, corEscolhida.hex, corEscolhida.texto);
+
+  if (animacao === "estatico") {
+    const botaoPath = tmpFile("png");
+    await fs.writeFile(botaoPath, botaoBuffer);
+    return { inputPath: botaoPath, inputOptions: ["-loop 1"], overlayYOffset: 0, dirParaLimpar: null };
+  }
+
+  const imagemBase = await loadImage(botaoBuffer);
+  // Só o "pulsar" precisa de um canvas maior que o botão (folga pro
+  // crescimento não cortar nas bordas) — o "piscar" só muda opacidade, então
+  // usa exatamente o tamanho do botão, sem deslocar nada.
+  const folga = animacao === "pulsar" ? 1 + PULSAR_ESCALA_MAX + 0.06 : 1;
+  const larguraCanvas = Math.ceil(imagemBase.width * folga);
+  const alturaCanvas = Math.ceil(imagemBase.height * folga);
+  // Desenha sempre ancorado na base do canvas (não centralizado) — assim,
+  // combinado com o overlayYOffset abaixo, a borda inferior do botão cai
+  // exatamente na mesma posição do botão estático, com ou sem folga extra.
+  const overlayYOffset = alturaCanvas - imagemBase.height;
+
+  const periodo = animacao === "pulsar" ? PULSAR_PERIODO_S : PISCAR_PERIODO_S;
+  const totalFrames = Math.max(1, Math.ceil(duracaoSegundos * BOTAO_ANIMACAO_FPS) + BOTAO_ANIMACAO_FPS);
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pv-cta-"));
+
+  for (let i = 0; i < totalFrames; i++) {
+    const t = i / BOTAO_ANIMACAO_FPS;
+    // Onda suave 0 -> 1 -> 0 ao longo do período (em vez de um seno cru, que
+    // começaria "no meio do movimento" em t=0).
+    const fase = 0.5 - 0.5 * Math.cos((2 * Math.PI * t) / periodo);
+
+    const canvas = createCanvas(larguraCanvas, alturaCanvas);
+    const ctx = canvas.getContext("2d");
+
+    if (animacao === "pulsar") {
+      const escala = 1 + PULSAR_ESCALA_MAX * fase;
+      const w = imagemBase.width * escala;
+      const h = imagemBase.height * escala;
+      ctx.drawImage(imagemBase, (larguraCanvas - w) / 2, alturaCanvas - h, w, h);
+    } else {
+      ctx.globalAlpha = 1 - (1 - PISCAR_OPACIDADE_MIN) * fase;
+      ctx.drawImage(imagemBase, 0, 0, imagemBase.width, imagemBase.height);
+      ctx.globalAlpha = 1;
+    }
+
+    const nomeArquivo = `f${String(i).padStart(5, "0")}.png`;
+    await fs.writeFile(path.join(dir, nomeArquivo), canvas.toBuffer("image/png"));
+  }
+
+  return {
+    inputPath: path.join(dir, "f%05d.png"),
+    inputOptions: [`-framerate ${BOTAO_ANIMACAO_FPS}`],
+    overlayYOffset,
+    dirParaLimpar: dir,
+  };
+}
+
+/** Apaga a entrada do botão (arquivo único ou pasta de frames), sem derrubar a geração se falhar. */
+async function limparEntradaBotao(entrada: EntradaDeBotao | null): Promise<void> {
+  if (!entrada) return;
+  if (entrada.dirParaLimpar) {
+    await fs.rm(entrada.dirParaLimpar, { recursive: true, force: true }).catch(() => {});
+  } else {
+    await fs.unlink(entrada.inputPath).catch(() => {});
+  }
 }
 
 /**
@@ -290,9 +392,15 @@ export async function montarVideoComImagem(
   const audioPath = tmpFile("mp3");
   await fs.writeFile(imgPath, opts.imagemBuffer);
   await fs.writeFile(audioPath, opts.audioBuffer);
-  const botaoPath = await prepararBotao(opts.textoOverlay, opts.imagemBuffer);
 
   const duration = await getAudioDuration(audioPath);
+  const entradaBotao = await prepararEntradaBotao(
+    opts.textoOverlay,
+    opts.imagemBuffer,
+    opts.animacaoCta ?? "estatico",
+    duration
+  );
+
   const fps = 30;
   const totalFrames = Math.ceil(duration * fps);
 
@@ -303,13 +411,14 @@ export async function montarVideoComImagem(
   ];
   let lastLabel = "zoomed";
 
-  if (botaoPath) {
-    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-${margemInferior}[out]`);
+  if (entradaBotao) {
+    const deslocamento = entradaBotao.overlayYOffset > 0 ? `-${entradaBotao.overlayYOffset}` : "";
+    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-${margemInferior}${deslocamento}[out]`);
     lastLabel = "out";
   }
 
   const cmd = ffmpeg().input(imgPath).inputOptions(["-loop 1"]).input(audioPath);
-  if (botaoPath) cmd.input(botaoPath).inputOptions(["-loop 1"]);
+  if (entradaBotao) cmd.input(entradaBotao.inputPath).inputOptions(entradaBotao.inputOptions);
 
   await new Promise<void>((resolve, reject) => {
     cmd
@@ -329,7 +438,7 @@ export async function montarVideoComImagem(
 
   await fs.unlink(imgPath).catch(() => {});
   await fs.unlink(audioPath).catch(() => {});
-  if (botaoPath) await fs.unlink(botaoPath).catch(() => {});
+  await limparEntradaBotao(entradaBotao);
 }
 
 /**
@@ -348,10 +457,14 @@ export async function montarVideoComVideo(
   await fs.writeFile(vidPath, opts.videoBuffer);
   await fs.writeFile(audioPath, opts.audioBuffer);
 
-  const frameParaCor = await extrairFrameDoVideo(vidPath);
-  const botaoPath = await prepararBotao(opts.textoOverlay, frameParaCor);
-
   const duration = await getAudioDuration(audioPath);
+  const frameParaCor = await extrairFrameDoVideo(vidPath);
+  const entradaBotao = await prepararEntradaBotao(
+    opts.textoOverlay,
+    frameParaCor,
+    opts.animacaoCta ?? "estatico",
+    duration
+  );
 
   const filtros =
     ajuste === "conter"
@@ -368,13 +481,14 @@ export async function montarVideoComVideo(
         ];
   let lastLabel = "cropped";
 
-  if (botaoPath) {
-    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-${margemInferior}[out]`);
+  if (entradaBotao) {
+    const deslocamento = entradaBotao.overlayYOffset > 0 ? `-${entradaBotao.overlayYOffset}` : "";
+    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-${margemInferior}${deslocamento}[out]`);
     lastLabel = "out";
   }
 
   const cmd = ffmpeg().input(vidPath).inputOptions(["-stream_loop -1"]).input(audioPath);
-  if (botaoPath) cmd.input(botaoPath).inputOptions(["-loop 1"]);
+  if (entradaBotao) cmd.input(entradaBotao.inputPath).inputOptions(entradaBotao.inputOptions);
 
   await new Promise<void>((resolve, reject) => {
     cmd
@@ -394,7 +508,7 @@ export async function montarVideoComVideo(
 
   await fs.unlink(vidPath).catch(() => {});
   await fs.unlink(audioPath).catch(() => {});
-  if (botaoPath) await fs.unlink(botaoPath).catch(() => {});
+  await limparEntradaBotao(entradaBotao);
 }
 
 export function novoArquivoDeSaida(): string {

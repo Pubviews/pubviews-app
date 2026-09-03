@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { gerarNarracao } from "@/lib/elevenlabs";
 import { gerarImagem, sugerirTermosDeBusca } from "@/lib/gemini";
 import { buscarVideoStock, baixarVideo } from "@/lib/pexels";
-import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida } from "@/lib/video";
+import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida, type AnimacaoCta } from "@/lib/video";
 import { promises as fs } from "fs";
 import { put } from "@vercel/blob";
 import { salvarNoHistorico } from "@/lib/db";
@@ -15,6 +15,11 @@ export const runtime = "nodejs";
 export const maxDuration = 280;
 
 const encoder = new TextEncoder();
+
+const ANIMACOES_CTA_VALIDAS = new Set<AnimacaoCta>(["estatico", "pulsar", "piscar"]);
+function lerAnimacaoCta(valor: unknown): AnimacaoCta {
+  return ANIMACOES_CTA_VALIDAS.has(valor as AnimacaoCta) ? (valor as AnimacaoCta) : "estatico";
+}
 
 /**
  * Resposta em stream (NDJSON: uma linha JSON por evento) em vez de esperar
@@ -39,6 +44,7 @@ export async function POST(req: NextRequest) {
           body.formato === "video" ? "video" : body.formato === "video_original" ? "video_original" : "imagem";
         const descricaoVisual: string = body.descricaoVisual || texto;
         const textoOverlay: string | undefined = body.textoOverlay || undefined;
+        const animacaoCta = lerAnimacaoCta(body.animacaoCta);
         const voiceId: string | undefined = body.voiceId || undefined;
         // URL do Vercel Blob (não os bytes direto) — o upload já aconteceu do
         // navegador pro Blob, então aqui só busca o arquivo, sem esbarrar no
@@ -68,7 +74,7 @@ export async function POST(req: NextRequest) {
           const imagem = await gerarImagem(descricaoVisual);
           const imagemBuffer = Buffer.from(imagem.base64, "base64");
           emitir({ tipo: "progresso", etapa: "render", mensagem: "Montando o vídeo...", pct: 55 });
-          await montarVideoComImagem({ audioBuffer, imagemBuffer, textoOverlay, saidaPath });
+          await montarVideoComImagem({ audioBuffer, imagemBuffer, textoOverlay, animacaoCta, saidaPath });
         } else if (formato === "video_original") {
           // Reaproveita o vídeo original enviado pelo usuário como visual — só a
           // narração é nova, a cena continua sendo a do criativo vencedor de
@@ -109,7 +115,7 @@ export async function POST(req: NextRequest) {
           }
           const videoBuffer = await baixarVideo(stock.url);
           emitir({ tipo: "progresso", etapa: "render", mensagem: "Montando o vídeo...", pct: 55 });
-          await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay, saidaPath });
+          await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay, animacaoCta, saidaPath });
         }
 
         emitir({ tipo: "progresso", etapa: "finalizando", mensagem: "Finalizando...", pct: 95 });

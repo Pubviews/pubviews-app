@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { gerarNarracao } from "@/lib/elevenlabs";
 import { gerarImagem, sugerirTermosDeBusca } from "@/lib/gemini";
 import { buscarVideoStock, baixarVideo } from "@/lib/pexels";
-import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida } from "@/lib/video";
+import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida, type AnimacaoCta } from "@/lib/video";
 import { promises as fs } from "fs";
 import { put } from "@vercel/blob";
 import { salvarNoHistorico } from "@/lib/db";
@@ -15,6 +15,11 @@ export const runtime = "nodejs";
 export const maxDuration = 290;
 
 const encoder = new TextEncoder();
+
+const ANIMACOES_CTA_VALIDAS = new Set<AnimacaoCta>(["estatico", "pulsar", "piscar"]);
+function lerAnimacaoCta(valor: unknown): AnimacaoCta {
+  return ANIMACOES_CTA_VALIDAS.has(valor as AnimacaoCta) ? (valor as AnimacaoCta) : "estatico";
+}
 
 /**
  * Igual à rota /api/variacoes/gerar, mas gera a narração e o material visual
@@ -42,6 +47,7 @@ export async function POST(req: NextRequest) {
           body.formato === "video" ? "video" : body.formato === "video_original" ? "video_original" : "imagem";
         const descricaoVisual: string = body.descricaoVisual || texto;
         const textoOverlay: string | undefined = body.textoOverlay || undefined;
+        const animacaoCta = lerAnimacaoCta(body.animacaoCta);
         const voiceId: string | undefined = body.voiceId || undefined;
         const videoOriginalUrl: string | undefined = body.videoOriginalUrl || undefined;
         const nicho: string | undefined = body.nicho || undefined;
@@ -72,6 +78,7 @@ export async function POST(req: NextRequest) {
               audioBuffer,
               imagemBuffer,
               textoOverlay,
+              animacaoCta,
               saidaPath: saidaVertical,
               formatoVideo: "vertical",
             }),
@@ -79,6 +86,7 @@ export async function POST(req: NextRequest) {
               audioBuffer,
               imagemBuffer,
               textoOverlay,
+              animacaoCta,
               saidaPath: saidaQuadrado,
               formatoVideo: "quadrado",
             }),
@@ -140,6 +148,7 @@ export async function POST(req: NextRequest) {
               audioBuffer,
               videoBuffer,
               textoOverlay,
+              animacaoCta,
               saidaPath: saidaVertical,
               formatoVideo: "vertical",
             }),
@@ -147,6 +156,7 @@ export async function POST(req: NextRequest) {
               audioBuffer,
               videoBuffer,
               textoOverlay,
+              animacaoCta,
               saidaPath: saidaQuadrado,
               formatoVideo: "quadrado",
             }),
