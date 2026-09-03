@@ -415,12 +415,11 @@ export default function VariacoesPage() {
             Ou cole o link de um anúncio que você encontrou na Ad Library (opcional)
           </label>
           <p className="mt-1 text-xs text-zinc-500">
-            De um concorrente ou inspiração: na Ad Library, clique no anúncio pra abrir os
-            detalhes dele, espere carregar e SÓ DEPOIS copie o link da barra de endereço do
-            navegador (a Meta reescreve a URL nessa hora — copiar antes de abrir não funciona). A
-            gente busca o texto real do anúncio (Texto Principal, Título, Descrição) e tenta
-            também achar o vídeo/imagem dele — quando acha o vídeo, ele fica disponível pra
-            reaproveitar igual ao vídeo próprio acima.
+            De um concorrente ou inspiração — cole o link do anúncio específico (o que tem
+            &quot;id=&quot; na URL, ex: facebook.com/ads/library/?id=123...). A gente tenta buscar
+            o texto real do anúncio (título, descrição) e também o vídeo/imagem dele — quando acha
+            o vídeo, ele fica disponível pra reaproveitar igual ao vídeo próprio acima. Isso é uma
+            tentativa por fora da API oficial da Meta, então pode não achar tudo sempre.
           </p>
           <div className="mt-2 flex flex-col gap-2 sm:flex-row">
             <input

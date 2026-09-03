@@ -127,15 +127,12 @@ export interface AnuncioDaBiblioteca {
  * Extrai o ID do anúncio (ad_archive_id) e, se presente, o ID da página
  * (view_all_page_id/page_id) de um link da Ad Library colado pelo usuário.
  *
- * IMPORTANTE sobre o page_id: a Ad Library API NÃO tem um jeito de buscar
- * "esse um anúncio específico" direto pelo ID — só busca por palavra-chave
- * (search_terms) ou por página (search_page_ids). Então pra achar os dados
- * oficiais desse anúncio específico a gente precisa saber a página dele e
- * procurar entre os anúncios dela. A boa notícia: quando o usuário abre um
- * anúncio na Ad Library (clica pra ver os detalhes) e SÓ DEPOIS copia o link
- * da barra de endereço, a própria Meta já reescreve a URL incluindo
- * "view_all_page_id" — então pedir pro usuário copiar o link *depois* de
- * abrir o anúncio (não o link de um card fechado) já resolve isso na prática.
+ * A maioria dos links que o usuário cola (ex: .../ads/library/?id=123...)
+ * só tem o ID do anúncio — o ID da página só aparece se ele copiar o link
+ * DEPOIS de abrir os detalhes do anúncio (a Meta reescreve a URL nessa
+ * hora). Por isso o fluxo principal (buscarAnuncioRenderizado, abaixo) não
+ * depende do page_id — ele só é usado como reforço opcional quando já vem
+ * no link.
  */
 export function extrairIdsDoLink(url: string): { adId: string | null; pageId: string | null } {
   let adId: string | null = null;
@@ -156,6 +153,79 @@ export function extrairIdsDoLink(url: string): { adId: string | null; pageId: st
   return { adId, pageId };
 }
 
+function limparTextoRaspado(s: string): string {
+  return s
+    .replace(/\\u0026/g, "&")
+    .replace(/\\\//g, "/")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .trim();
+}
+
+function conteudoDaMetaTag(html: string, propriedade: string): string | null {
+  const padrao1 = new RegExp(`<meta[^>]+(?:property|name)=["']${propriedade}["'][^>]*content=["']([^"']*)["']`, "i");
+  const m1 = html.match(padrao1);
+  if (m1) return limparTextoRaspado(m1[1]);
+  const padrao2 = new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${propriedade}["']`, "i");
+  const m2 = html.match(padrao2);
+  return m2 ? limparTextoRaspado(m2[1]) : null;
+}
+
+export interface RaspagemDoAnuncio {
+  titulo?: string;
+  descricao?: string;
+  nomeDaPagina?: string;
+  midia?: { tipo: "video" | "imagem"; url: string };
+}
+
+function rasparHtmlDoAnuncio(html: string): RaspagemDoAnuncio {
+  const titulo = conteudoDaMetaTag(html, "og:title") || undefined;
+  const descricao = conteudoDaMetaTag(html, "og:description") || undefined;
+  const nomeDaPagina = conteudoDaMetaTag(html, "og:site_name") || undefined;
+
+  let midia: RaspagemDoAnuncio["midia"];
+  const video = html.match(/https:[^"'\s\\]+?\.mp4[^"'\s\\]*/i);
+  if (video) {
+    midia = { tipo: "video", url: limparTextoRaspado(video[0]) };
+  } else {
+    const imagem = html.match(/https:\/\/scontent[^"'\s\\]+?\.(?:jpg|jpeg|png)[^"'\s\\]*/i);
+    if (imagem) midia = { tipo: "imagem", url: limparTextoRaspado(imagem[0]) };
+  }
+
+  return { titulo, descricao, nomeDaPagina, midia };
+}
+
+/**
+ * Busca (best-effort) os dados de UM anúncio específico direto pelo ID —
+ * sem precisar saber a página dele — usando o endpoint público de
+ * renderização de anúncio da própria Meta (o mesmo formato do campo
+ * ad_snapshot_url que a Ad Library API devolve:
+ * "https://www.facebook.com/ads/archive/render_ad/?id=...&access_token=...").
+ * Diferente da busca por palavra-chave/página (ads_archive), esse endpoint
+ * aceita o ID isolado — mas não é um campo estruturado da API, então a
+ * gente lê o HTML dele (tags Open Graph pro texto, regex pra mídia) em vez
+ * de JSON. Por ser fora do contrato oficial da API, é sempre best-effort:
+ * pode não trazer nada, ou parar de funcionar se a Meta mudar essa página.
+ */
+export async function buscarAnuncioRenderizado(adId: string): Promise<RaspagemDoAnuncio | null> {
+  const token = env.metaAccessToken();
+  const url = `https://www.facebook.com/ads/archive/render_ad/?id=${encodeURIComponent(adId)}&access_token=${encodeURIComponent(token)}`;
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; PubViewsTool/1.0)" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+    return rasparHtmlDoAnuncio(html);
+  } catch {
+    return null;
+  }
+}
+
 // Países usados pra tentar achar o anúncio específico dentro da página (a
 // Ad Library exige um filtro de país na busca) — uma lista de mercados
 // comuns, já que a gente não sabe de antemão em quais países esse anúncio
@@ -163,10 +233,14 @@ export function extrairIdsDoLink(url: string): { adId: string | null; pageId: st
 const PAISES_BUSCA_PADRAO = ["US", "CA", "GB", "AU", "BR", "PT"];
 
 /**
- * Procura UM anúncio específico dentro dos anúncios (ativos ou não) de uma
- * página, usando search_page_ids — a única forma oficial de "mirar" num
- * anúncio já conhecido, já que a API não busca por ID isolado. Devolve null
- * se não achar (pode estar fora dos países tentados, ou a página não bateu).
+ * Reforço opcional: procura o anúncio dentro dos anúncios (ativos ou não) de
+ * uma página, usando search_page_ids — só funciona quando o link colado já
+ * veio com o ID da página (o que só acontece se o usuário copiou o link
+ * depois de abrir os detalhes do anúncio). Quando funciona, é melhor que a
+ * raspagem por render_ad porque usa os campos estruturados oficiais da API
+ * (ad_creative_bodies/titles/descriptions) em vez de tags Open Graph.
+ * Devolve null se não achar (pode estar fora dos países tentados, ou a
+ * página não bateu).
  */
 export async function buscarAnuncioNaPagina(adId: string, pageId: string): Promise<AnuncioDaBiblioteca | null> {
   const token = env.metaAccessToken();
@@ -237,15 +311,7 @@ export async function extrairMidiaDoSnapshot(
     });
     if (!res.ok) return null;
     const html = await res.text();
-    const limpar = (s: string) => s.replace(/\\u0026/g, "&").replace(/\\\//g, "/");
-
-    const video = html.match(/https:[^"'\s\\]+?\.mp4[^"'\s\\]*/i);
-    if (video) return { tipo: "video", url: limpar(video[0]) };
-
-    const imagem = html.match(/https:\/\/scontent[^"'\s\\]+?\.(?:jpg|jpeg|png)[^"'\s\\]*/i);
-    if (imagem) return { tipo: "imagem", url: limpar(imagem[0]) };
-
-    return null;
+    return rasparHtmlDoAnuncio(html).midia ?? null;
   } catch {
     return null;
   }
