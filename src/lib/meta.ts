@@ -124,54 +124,97 @@ export interface AnuncioDaBiblioteca {
 }
 
 /**
- * Extrai o ID do anúncio (ad_archive_id) de um link da Ad Library colado
- * pelo usuário — normalmente algo como
- * "https://www.facebook.com/ads/library/?id=1234567890123456", mas aceita
- * qualquer URL com "id=" na query, ou até só o número copiado direto.
+ * Extrai o ID do anúncio (ad_archive_id) e, se presente, o ID da página
+ * (view_all_page_id/page_id) de um link da Ad Library colado pelo usuário.
+ *
+ * IMPORTANTE sobre o page_id: a Ad Library API NÃO tem um jeito de buscar
+ * "esse um anúncio específico" direto pelo ID — só busca por palavra-chave
+ * (search_terms) ou por página (search_page_ids). Então pra achar os dados
+ * oficiais desse anúncio específico a gente precisa saber a página dele e
+ * procurar entre os anúncios dela. A boa notícia: quando o usuário abre um
+ * anúncio na Ad Library (clica pra ver os detalhes) e SÓ DEPOIS copia o link
+ * da barra de endereço, a própria Meta já reescreve a URL incluindo
+ * "view_all_page_id" — então pedir pro usuário copiar o link *depois* de
+ * abrir o anúncio (não o link de um card fechado) já resolve isso na prática.
  */
-export function extrairIdDoAnuncio(url: string): string | null {
+export function extrairIdsDoLink(url: string): { adId: string | null; pageId: string | null } {
+  let adId: string | null = null;
+  let pageId: string | null = null;
   try {
     const u = new URL(url);
     const id = u.searchParams.get("id");
-    if (id && /^\d+$/.test(id)) return id;
+    if (id && /^\d+$/.test(id)) adId = id;
+    const viewAllPageId = u.searchParams.get("view_all_page_id") || u.searchParams.get("page_id");
+    if (viewAllPageId && /^\d+$/.test(viewAllPageId)) pageId = viewAllPageId;
   } catch {
-    // não é uma URL válida — tenta achar um número grande no texto mesmo assim
+    // não é uma URL válida — tenta achar pelo menos o ID do anúncio no texto mesmo assim
   }
-  const match = url.match(/(\d{10,})/);
-  return match ? match[1] : null;
+  if (!adId) {
+    const match = url.match(/(\d{10,})/);
+    if (match) adId = match[1];
+  }
+  return { adId, pageId };
 }
 
+// Países usados pra tentar achar o anúncio específico dentro da página (a
+// Ad Library exige um filtro de país na busca) — uma lista de mercados
+// comuns, já que a gente não sabe de antemão em quais países esse anúncio
+// específico foi veiculado.
+const PAISES_BUSCA_PADRAO = ["US", "CA", "GB", "AU", "BR", "PT"];
+
 /**
- * Busca os dados públicos de UM anúncio específico da Ad Library pelo ID
- * (o node "ArchivedAd" do Graph API aceita GET direto por ID, além da busca
- * por palavra-chave usada em searchAdLibrary).
+ * Procura UM anúncio específico dentro dos anúncios (ativos ou não) de uma
+ * página, usando search_page_ids — a única forma oficial de "mirar" num
+ * anúncio já conhecido, já que a API não busca por ID isolado. Devolve null
+ * se não achar (pode estar fora dos países tentados, ou a página não bateu).
  */
-export async function buscarAnuncioPorId(adId: string): Promise<AnuncioDaBiblioteca> {
+export async function buscarAnuncioNaPagina(adId: string, pageId: string): Promise<AnuncioDaBiblioteca | null> {
   const token = env.metaAccessToken();
-  const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/${adId}`);
+  const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/ads_archive`);
   url.searchParams.set("access_token", token);
+  url.searchParams.set("search_page_ids", JSON.stringify([pageId]));
+  url.searchParams.set("ad_type", "ALL");
+  url.searchParams.set("ad_active_status", "ALL");
+  url.searchParams.set("ad_reached_countries", JSON.stringify(PAISES_BUSCA_PADRAO));
   url.searchParams.set(
     "fields",
     "id,page_name,ad_creative_bodies,ad_creative_link_titles,ad_creative_link_descriptions,ad_snapshot_url"
   );
+  url.searchParams.set("limit", "250");
 
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(
-      `Não consegui buscar esse anúncio na Ad Library (erro ${res.status}). Confira se o link é de um anúncio ativo/público. Detalhe: ${body.slice(0, 300)}`
-    );
+  interface AdArchiveDetalhado {
+    id: string;
+    page_name?: string;
+    ad_creative_bodies?: string[];
+    ad_creative_link_titles?: string[];
+    ad_creative_link_descriptions?: string[];
+    ad_snapshot_url?: string;
   }
-  const json = await res.json();
 
-  return {
-    id: json.id || adId,
-    pageName: json.page_name || "",
-    textoPrincipal: (json.ad_creative_bodies || [])[0] || "",
-    titulo: (json.ad_creative_link_titles || [])[0] || "",
-    descricao: (json.ad_creative_link_descriptions || [])[0] || "",
-    snapshotUrl: json.ad_snapshot_url || `https://www.facebook.com/ads/library/?id=${adId}`,
-  };
+  let nextUrl: string | null = url.toString();
+  let pages = 0;
+  while (nextUrl && pages < 6) {
+    const res: Response = await fetch(nextUrl);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Meta Ad Library API erro ${res.status}: ${body.slice(0, 300)}`);
+    }
+    const json: { data?: AdArchiveDetalhado[]; paging?: { next?: string } } = await res.json();
+    const achado = (json.data ?? []).find((a) => a.id === adId);
+    if (achado) {
+      return {
+        id: achado.id,
+        pageName: achado.page_name || "",
+        textoPrincipal: (achado.ad_creative_bodies || [])[0] || "",
+        titulo: (achado.ad_creative_link_titles || [])[0] || "",
+        descricao: (achado.ad_creative_link_descriptions || [])[0] || "",
+        snapshotUrl: achado.ad_snapshot_url || `https://www.facebook.com/ads/library/?id=${adId}`,
+      };
+    }
+    nextUrl = json.paging?.next ?? null;
+    pages += 1;
+  }
+  return null;
 }
 
 /**
