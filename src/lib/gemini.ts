@@ -220,6 +220,53 @@ export async function sugerirNichoDoTexto(texto: string): Promise<string> {
   return raw.trim().replace(/^["']|["']$/g, "");
 }
 
+const ROTULO_TIPO_TEXTO: Record<string, string> = {
+  texto_principal: "Texto Principal (corpo do anúncio, aparece acima da imagem/vídeo)",
+  titulo: "Título (headline curta, aparece abaixo da imagem/vídeo, geralmente até ~40 caracteres)",
+  descricao: "Descrição (linha extra abaixo do título, geralmente até ~30 caracteres, opcional em vários formatos)",
+};
+
+/**
+ * Gera N variações de um Texto Principal, Título ou Descrição de anúncio que
+ * já provou funcionar no nicho (repetido em vários anúncios ativos na Ad
+ * Library) — mantém a ideia/gancho central, texto novo, mesmo tipo/tamanho.
+ */
+export async function gerarVariacoesDeTexto(params: {
+  texto: string;
+  tipo: "texto_principal" | "titulo" | "descricao";
+  nicho: string;
+  quantidade: number;
+}): Promise<string[]> {
+  const rotulo = ROTULO_TIPO_TEXTO[params.tipo] || params.tipo;
+  const prompt = `Você é um redator de anúncios para Meta Ads (Facebook/Instagram).
+Nicho: ${params.nicho}
+Tipo de texto: ${rotulo}
+Texto de referência, que já é usado em anúncios ativos e repetidos desse nicho (ou seja, já funciona): "${params.texto}"
+
+Gere ${params.quantidade} variações desse texto, em INGLÊS, mantendo a mesma ideia central/gancho e aproximadamente o mesmo tamanho do texto de referência, mas com redação diferente entre si (evite repetir as mesmas frases). Sem markdown, sem aspas, sem numeração dentro do texto, sem emojis a menos que o texto de referência já use emojis.
+
+Responda em JSON puro, um array de strings, exemplo: ["variação 1", "variação 2"]. Nada além do array JSON.`;
+
+  const json = await callGemini(TEXT_MODEL, {
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.9 },
+  });
+
+  const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
+  const cleaned = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "");
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean).slice(0, params.quantidade);
+  } catch {
+    // fallback: quebra por linha se o modelo não devolveu JSON limpo
+  }
+  return cleaned
+    .split("\n")
+    .map((l) => l.replace(/^[-\d.\s"]+/, "").replace(/"$/, "").trim())
+    .filter(Boolean)
+    .slice(0, params.quantidade);
+}
+
 /**
  * Sugere termos de busca em inglês (para Pexels) a partir de uma descrição de nicho/cena.
  */

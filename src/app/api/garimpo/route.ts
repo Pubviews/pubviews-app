@@ -14,8 +14,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Informe o termo de busca (searchTerms)." }, { status: 400 });
     }
 
-    const resultados = await searchAdLibrary({ searchTerms, countries });
-    return NextResponse.json({ resultados });
+    const busca = await searchAdLibrary({ searchTerms, countries });
+    return NextResponse.json({
+      resultados: busca.resultados,
+      melhoresTextosPrincipais: busca.melhoresTextosPrincipais,
+      melhoresTitulos: busca.melhoresTitulos,
+      melhoresDescricoes: busca.melhoresDescricoes,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

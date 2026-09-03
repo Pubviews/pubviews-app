@@ -15,11 +15,150 @@ interface GarimpoResult {
   link_biblioteca: string;
 }
 
+interface MelhorTexto {
+  texto: string;
+  vezes: number;
+  paginas: string[];
+}
+
 const STATUS_STYLE: Record<string, string> = {
   "CANDIDATO FORTE": "bg-emerald-100 text-emerald-800",
   CANDIDATO: "bg-amber-100 text-amber-800",
   DESCARTAR: "bg-zinc-100 text-zinc-500",
 };
+
+const TIPO_TEXTO_ROTULO: Record<string, string> = {
+  texto_principal: "Textos Principais mais usados no nicho",
+  titulo: "Títulos mais usados no nicho",
+  descricao: "Descrições mais usadas no nicho",
+};
+
+/**
+ * Um texto (Texto Principal / Título / Descrição) que se repete entre
+ * anúncios ativos de páginas CANDIDATO/CANDIDATO FORTE — com botão pra gerar
+ * variações dele via IA sob demanda (guarda o resultado só nesse cartão).
+ */
+function CartaoDeTexto({
+  item,
+  tipo,
+  nicho,
+}: {
+  item: MelhorTexto;
+  tipo: "texto_principal" | "titulo" | "descricao";
+  nicho: string;
+}) {
+  const [variacoes, setVariacoes] = useState<string[] | null>(null);
+  const [carregando, setCarregando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [copiado, setCopiado] = useState<string | null>(null);
+
+  async function gerarVariacoes() {
+    setCarregando(true);
+    setErro(null);
+    try {
+      const res = await fetch("/api/garimpo/variar-texto", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ texto: item.texto, tipo, nicho, quantidade: 5 }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Erro ao gerar variações.");
+      setVariacoes(json.variacoes);
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  async function copiar(texto: string) {
+    try {
+      await navigator.clipboard.writeText(texto);
+      setCopiado(texto);
+      setTimeout(() => setCopiado((atual) => (atual === texto ? null : atual)), 1500);
+    } catch {
+      // navegador sem permissão de clipboard — sem problema, o texto já está visível pra selecionar
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-sm text-zinc-800">{item.texto}</p>
+        <button
+          onClick={() => copiar(item.texto)}
+          className="shrink-0 text-xs text-zinc-500 hover:text-zinc-900"
+          title="Copiar texto original"
+        >
+          {copiado === item.texto ? "Copiado!" : "Copiar"}
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-zinc-500">
+        Usado em {item.vezes} anúncio{item.vezes === 1 ? "" : "s"} ativo{item.vezes === 1 ? "" : "s"}
+        {item.paginas.length > 0 && <> — {item.paginas.slice(0, 3).join(", ")}</>}
+      </p>
+
+      {!variacoes && (
+        <button
+          onClick={gerarVariacoes}
+          disabled={carregando}
+          className="mt-2 rounded-md border border-zinc-300 bg-white px-3 py-1 text-xs font-medium text-zinc-700 disabled:opacity-40"
+        >
+          {carregando ? "Gerando..." : "Gerar variações com IA"}
+        </button>
+      )}
+
+      {erro && <p className="mt-2 text-xs text-red-600">{erro}</p>}
+
+      {variacoes && (
+        <div className="mt-3 space-y-2 border-t border-zinc-200 pt-2">
+          {variacoes.map((v, i) => (
+            <div key={i} className="flex items-start justify-between gap-3">
+              <p className="text-sm text-zinc-700">{v}</p>
+              <button
+                onClick={() => copiar(v)}
+                className="shrink-0 text-xs text-zinc-500 hover:text-zinc-900"
+              >
+                {copiado === v ? "Copiado!" : "Copiar"}
+              </button>
+            </div>
+          ))}
+          <button
+            onClick={gerarVariacoes}
+            disabled={carregando}
+            className="text-xs font-medium text-zinc-600 underline underline-offset-2 disabled:opacity-40"
+          >
+            {carregando ? "Gerando..." : "Gerar outras 5"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ListaDeTextos({
+  titulo,
+  itens,
+  tipo,
+  nicho,
+}: {
+  titulo: string;
+  itens: MelhorTexto[];
+  tipo: "texto_principal" | "titulo" | "descricao";
+  nicho: string;
+}) {
+  if (itens.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white p-5">
+      <h3 className="text-sm font-semibold text-zinc-900">{titulo}</h3>
+      <div className="mt-3 space-y-3">
+        {itens.map((item, i) => (
+          <CartaoDeTexto key={i} item={item} tipo={tipo} nicho={nicho} />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function GarimpoConteudo() {
   // Pré-preenche e já busca sozinho quando vem de "Buscar esse nicho no
@@ -32,6 +171,9 @@ function GarimpoConteudo() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resultados, setResultados] = useState<GarimpoResult[] | null>(null);
+  const [melhoresTextosPrincipais, setMelhoresTextosPrincipais] = useState<MelhorTexto[]>([]);
+  const [melhoresTitulos, setMelhoresTitulos] = useState<MelhorTexto[]>([]);
+  const [melhoresDescricoes, setMelhoresDescricoes] = useState<MelhorTexto[]>([]);
 
   async function buscar(termoParaBuscar?: string) {
     const termo = termoParaBuscar ?? searchTerms;
@@ -39,6 +181,9 @@ function GarimpoConteudo() {
     setLoading(true);
     setError(null);
     setResultados(null);
+    setMelhoresTextosPrincipais([]);
+    setMelhoresTitulos([]);
+    setMelhoresDescricoes([]);
     try {
       const res = await fetch("/api/garimpo", {
         method: "POST",
@@ -54,6 +199,9 @@ function GarimpoConteudo() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Erro ao buscar.");
       setResultados(json.resultados);
+      setMelhoresTextosPrincipais(json.melhoresTextosPrincipais || []);
+      setMelhoresTitulos(json.melhoresTitulos || []);
+      setMelhoresDescricoes(json.melhoresDescricoes || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -70,6 +218,9 @@ function GarimpoConteudo() {
     return () => clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const temTextos =
+    melhoresTextosPrincipais.length > 0 || melhoresTitulos.length > 0 || melhoresDescricoes.length > 0;
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-10">
@@ -163,6 +314,44 @@ function GarimpoConteudo() {
               )}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {resultados && resultados.length > 0 && (
+        <div className="mt-8">
+          <h2 className="text-lg font-semibold tracking-tight">Melhores textos do nicho</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Texto Principal, Título e Descrição que mais se repetem entre os anúncios ativos das páginas
+            CANDIDATO/CANDIDATO FORTE acima — repetição é o mesmo sinal de &quot;já funciona&quot; usado na
+            tabela, só que aplicado ao texto do anúncio. Gere variações com IA a partir de qualquer um deles.
+          </p>
+
+          {!temTextos && (
+            <p className="mt-4 text-sm text-zinc-500">
+              A Meta não devolveu texto estruturado pra nenhum anúncio candidato dessa busca.
+            </p>
+          )}
+
+          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <ListaDeTextos
+              titulo={TIPO_TEXTO_ROTULO.texto_principal}
+              itens={melhoresTextosPrincipais}
+              tipo="texto_principal"
+              nicho={searchTerms}
+            />
+            <ListaDeTextos
+              titulo={TIPO_TEXTO_ROTULO.titulo}
+              itens={melhoresTitulos}
+              tipo="titulo"
+              nicho={searchTerms}
+            />
+            <ListaDeTextos
+              titulo={TIPO_TEXTO_ROTULO.descricao}
+              itens={melhoresDescricoes}
+              tipo="descricao"
+              nicho={searchTerms}
+            />
+          </div>
         </div>
       )}
     </div>

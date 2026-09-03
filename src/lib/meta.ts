@@ -12,6 +12,22 @@ export interface AdLibraryAd {
   // vem como array porque anúncios diferentes da mesma página podem apontar
   // pra domínios diferentes; a Meta às vezes não devolve nada aqui.
   ad_creative_link_captions?: string[];
+  // Texto Principal, Título e Descrição do anúncio (campos oficiais da API,
+  // não raspagem) — a Meta devolve como array porque um anúncio pode ter
+  // mais de uma versão de cada (raro), e às vezes não devolve nada.
+  ad_creative_bodies?: string[];
+  ad_creative_link_titles?: string[];
+  ad_creative_link_descriptions?: string[];
+}
+
+export interface MelhorTexto {
+  texto: string;
+  // Em quantos anúncios ativos (de páginas diferentes ou não) esse texto
+  // exato apareceu — é o mesmo raciocínio de "3+ duplicações" usado pra
+  // status da página, só que aplicado ao texto em si: texto repetido é
+  // texto que já provou que converte.
+  vezes: number;
+  paginas: string[];
 }
 
 export interface GarimpoResult {
@@ -57,6 +73,43 @@ function daysBetween(iso: string): number {
   return Math.floor((now - start) / (1000 * 60 * 60 * 24));
 }
 
+function normalizarTexto(t: string): string {
+  return t.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Entre todos os anúncios ativos encontrados na busca (não só os de páginas
+ * CANDIDATO), conta quantas vezes cada Texto Principal/Título/Descrição
+ * exato se repete — o mesmo raciocínio de "duplicação = sinal de que já
+ * converte" usado pro status da página, aplicado ao texto do anúncio. Isso
+ * dá pro usuário uma amostra dos textos que mais funcionam nesse nicho,
+ * independente de qual página específica está usando.
+ */
+function melhoresTextos(
+  ads: AdLibraryAd[],
+  campo: "ad_creative_bodies" | "ad_creative_link_titles" | "ad_creative_link_descriptions",
+  limite = 8
+): MelhorTexto[] {
+  const contagem = new Map<string, { vezes: number; paginas: Set<string> }>();
+  for (const ad of ads) {
+    const valores = new Set((ad[campo] ?? []).map(normalizarTexto).filter(Boolean));
+    for (const texto of valores) {
+      const atual = contagem.get(texto) ?? { vezes: 0, paginas: new Set<string>() };
+      atual.vezes += 1;
+      atual.paginas.add(ad.page_name);
+      contagem.set(texto, atual);
+    }
+  }
+  const ordenado = Array.from(contagem.entries())
+    .map(([texto, { vezes, paginas }]) => ({ texto, vezes, paginas: Array.from(paginas).slice(0, 5) }))
+    .sort((a, b) => b.vezes - a.vezes);
+  // Prioriza texto repetido em 2+ anúncios (sinal real de duplicação); só cai
+  // pra texto único se o nicho não tiver nenhum repetido, pra nunca devolver
+  // a lista vazia.
+  const duplicados = ordenado.filter((t) => t.vezes >= 2);
+  return (duplicados.length > 0 ? duplicados : ordenado).slice(0, limite);
+}
+
 /**
  * Busca anúncios na Meta Ad Library por palavra-chave, em uma ou mais
  * combinações de países, e agrupa por página para aplicar os critérios:
@@ -66,7 +119,12 @@ export async function searchAdLibrary(params: {
   searchTerms: string;
   countries: string[];
   limit?: number;
-}): Promise<GarimpoResult[]> {
+}): Promise<{
+  resultados: GarimpoResult[];
+  melhoresTextosPrincipais: MelhorTexto[];
+  melhoresTitulos: MelhorTexto[];
+  melhoresDescricoes: MelhorTexto[];
+}> {
   const token = env.metaAccessToken();
   const limit = params.limit ?? 200;
 
@@ -78,7 +136,7 @@ export async function searchAdLibrary(params: {
   url.searchParams.set("ad_reached_countries", JSON.stringify(params.countries));
   url.searchParams.set(
     "fields",
-    "id,page_id,page_name,ad_delivery_start_time,ad_snapshot_url,ad_creative_link_captions"
+    "id,page_id,page_name,ad_delivery_start_time,ad_snapshot_url,ad_creative_link_captions,ad_creative_bodies,ad_creative_link_titles,ad_creative_link_descriptions"
   );
   url.searchParams.set("limit", String(Math.min(limit, 200)));
 
@@ -156,7 +214,20 @@ export async function searchAdLibrary(params: {
     return b.total_active_ads - a.total_active_ads;
   });
 
-  return results;
+  // Os "melhores textos do nicho" só olham pra anúncios de páginas que já
+  // bateram algum critério (CANDIDATO ou CANDIDATO FORTE) — página
+  // DESCARTAR não tem sinal nenhum de que o texto dela funciona.
+  const paginasCandidatas = new Set(
+    results.filter((r) => r.status !== "DESCARTAR").map((r) => r.page_id)
+  );
+  const adsCandidatos = allAds.filter((a) => paginasCandidatas.has(a.page_id));
+
+  return {
+    resultados: results,
+    melhoresTextosPrincipais: melhoresTextos(adsCandidatos, "ad_creative_bodies"),
+    melhoresTitulos: melhoresTextos(adsCandidatos, "ad_creative_link_titles"),
+    melhoresDescricoes: melhoresTextos(adsCandidatos, "ad_creative_link_descriptions"),
+  };
 }
 
 export interface AnuncioDaBiblioteca {
