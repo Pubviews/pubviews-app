@@ -13,11 +13,17 @@ interface CardVariacao {
   gerando: boolean;
   erro: string | null;
   videoUrl: string | null;
+  // Progresso da geração em andamento (botão "Gerar vídeo (vertical)") —
+  // null quando não tem nada rodando.
+  progressoPct: number | null;
+  progressoMensagem: string | null;
   // Resultado do botão "Gerar nos 2 formatos": vertical (1080x1920) + quadrado (1080x1080).
   gerandoDuplo: boolean;
   erroDuplo: string | null;
   videoUrlVertical: string | null;
   videoUrlQuadrado: string | null;
+  progressoDuploPct: number | null;
+  progressoDuploMensagem: string | null;
 }
 
 function base64ParaUrlDeVideo(base64: string, mimeType = "video/mp4"): string {
@@ -26,6 +32,54 @@ function base64ParaUrlDeVideo(base64: string, mimeType = "video/mp4"): string {
   for (let i = 0; i < bytes.length; i++) array[i] = bytes.charCodeAt(i);
   const blob = new Blob([array], { type: mimeType });
   return URL.createObjectURL(blob);
+}
+
+/**
+ * Lê uma resposta em stream NDJSON (uma linha JSON por evento — ver as rotas
+ * /api/variacoes/gerar e /gerar-multiformato) chamando onProgresso a cada
+ * evento de progresso, e devolve o evento final ("concluido"). Lança erro se
+ * vier um evento "erro" ou se o stream terminar sem nenhum dos dois (conexão
+ * cortada no meio, por exemplo).
+ */
+async function lerRespostaComProgresso(
+  res: Response,
+  onProgresso: (mensagem: string, pct: number) => void
+): Promise<Record<string, unknown>> {
+  if (!res.body) throw new Error("Resposta sem corpo.");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let resultado: Record<string, unknown> | null = null;
+  let erro: string | null = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let fimDaLinha: number;
+    while ((fimDaLinha = buffer.indexOf("\n")) >= 0) {
+      const linha = buffer.slice(0, fimDaLinha).trim();
+      buffer = buffer.slice(fimDaLinha + 1);
+      if (!linha) continue;
+      let evento: Record<string, unknown>;
+      try {
+        evento = JSON.parse(linha);
+      } catch {
+        continue;
+      }
+      if (evento.tipo === "progresso") {
+        onProgresso(String(evento.mensagem || ""), Number(evento.pct) || 0);
+      } else if (evento.tipo === "concluido") {
+        resultado = evento;
+      } else if (evento.tipo === "erro") {
+        erro = String(evento.error || "Erro ao gerar.");
+      }
+    }
+  }
+
+  if (erro) throw new Error(erro);
+  if (!resultado) throw new Error("A geração terminou sem devolver um resultado. Tente de novo.");
+  return resultado;
 }
 
 const TAMANHO_MAXIMO_VIDEO_MB = 80;
@@ -139,10 +193,14 @@ export default function VariacoesPage() {
         gerando: false,
         erro: null,
         videoUrl: null,
+        progressoPct: null,
+        progressoMensagem: null,
         gerandoDuplo: false,
         erroDuplo: null,
         videoUrlVertical: null,
         videoUrlQuadrado: null,
+        progressoDuploPct: null,
+        progressoDuploMensagem: null,
       }));
       setCards(novosCards);
     } catch (err) {
@@ -175,44 +233,67 @@ export default function VariacoesPage() {
     // Limpa o erro dos DOIS botões (vertical e "2 formatos") — são o mesmo
     // card, e um erro antigo de uma tentativa no outro botão não pode ficar
     // preso na tela depois que essa tentativa aqui deu certo.
-    atualizarCard(idx, { gerando: true, erro: null, erroDuplo: null });
+    atualizarCard(idx, {
+      gerando: true,
+      erro: null,
+      erroDuplo: null,
+      progressoPct: 0,
+      progressoMensagem: "Iniciando...",
+    });
     try {
       const res = await fetch("/api/variacoes/gerar", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(corpoDaGeracao(card)),
       });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({ error: "Erro ao gerar vídeo." }));
-        throw new Error(json.error || "Erro ao gerar vídeo.");
-      }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      atualizarCard(idx, { videoUrl: url, gerando: false });
+      const resultado = await lerRespostaComProgresso(res, (mensagem, pct) => {
+        atualizarCard(idx, { progressoMensagem: mensagem, progressoPct: pct });
+      });
+      const url = base64ParaUrlDeVideo(String(resultado.videoBase64 || ""));
+      atualizarCard(idx, { videoUrl: url, gerando: false, progressoPct: null, progressoMensagem: null });
     } catch (err) {
-      atualizarCard(idx, { erro: err instanceof Error ? err.message : String(err), gerando: false });
+      atualizarCard(idx, {
+        erro: err instanceof Error ? err.message : String(err),
+        gerando: false,
+        progressoPct: null,
+        progressoMensagem: null,
+      });
     }
   }
 
   async function gerarVideoDuploFormato(idx: number) {
     const card = cards[idx];
-    atualizarCard(idx, { gerandoDuplo: true, erroDuplo: null, erro: null });
+    atualizarCard(idx, {
+      gerandoDuplo: true,
+      erroDuplo: null,
+      erro: null,
+      progressoDuploPct: 0,
+      progressoDuploMensagem: "Iniciando...",
+    });
     try {
       const res = await fetch("/api/variacoes/gerar-multiformato", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(corpoDaGeracao(card)),
       });
-      const json = await res.json().catch(() => ({ error: "Erro ao gerar os vídeos." }));
-      if (!res.ok) throw new Error(json.error || "Erro ao gerar os vídeos.");
+      const resultado = await lerRespostaComProgresso(res, (mensagem, pct) => {
+        atualizarCard(idx, { progressoDuploMensagem: mensagem, progressoDuploPct: pct });
+      });
 
       atualizarCard(idx, {
-        videoUrlVertical: base64ParaUrlDeVideo(json.vertical),
-        videoUrlQuadrado: base64ParaUrlDeVideo(json.quadrado),
+        videoUrlVertical: base64ParaUrlDeVideo(String(resultado.vertical || "")),
+        videoUrlQuadrado: base64ParaUrlDeVideo(String(resultado.quadrado || "")),
         gerandoDuplo: false,
+        progressoDuploPct: null,
+        progressoDuploMensagem: null,
       });
     } catch (err) {
-      atualizarCard(idx, { erroDuplo: err instanceof Error ? err.message : String(err), gerandoDuplo: false });
+      atualizarCard(idx, {
+        erroDuplo: err instanceof Error ? err.message : String(err),
+        gerandoDuplo: false,
+        progressoDuploPct: null,
+        progressoDuploMensagem: null,
+      });
     }
   }
 
@@ -386,16 +467,43 @@ export default function VariacoesPage() {
                   disabled={card.gerando}
                   className="flex-1 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
                 >
-                  {card.gerando ? "Gerando vídeo (pode levar ~1 min)..." : "Gerar vídeo (vertical)"}
+                  {card.gerando ? "Gerando..." : "Gerar vídeo (vertical)"}
                 </button>
                 <button
                   onClick={() => gerarVideoDuploFormato(idx)}
                   disabled={card.gerandoDuplo}
                   className="flex-1 rounded-md border border-zinc-900 px-4 py-2 text-sm font-medium text-zinc-900 disabled:opacity-40"
                 >
-                  {card.gerandoDuplo ? "Gerando os 2 formatos (pode levar ~1-2 min)..." : "Gerar nos 2 formatos"}
+                  {card.gerandoDuplo ? "Gerando..." : "Gerar nos 2 formatos"}
                 </button>
               </div>
+
+              {card.progressoPct !== null && (
+                <div className="mt-2">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+                    <div
+                      className="h-full rounded-full bg-zinc-900 transition-all duration-300"
+                      style={{ width: `${Math.max(4, card.progressoPct)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {card.progressoMensagem} ({card.progressoPct}%)
+                  </p>
+                </div>
+              )}
+              {card.progressoDuploPct !== null && (
+                <div className="mt-2">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
+                    <div
+                      className="h-full rounded-full bg-zinc-900 transition-all duration-300"
+                      style={{ width: `${Math.max(4, card.progressoDuploPct)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    2 formatos: {card.progressoDuploMensagem} ({card.progressoDuploPct}%)
+                  </p>
+                </div>
+              )}
 
               {card.erro && <p className="mt-2 text-sm text-red-700">{card.erro}</p>}
               {card.erroDuplo && <p className="mt-2 text-sm text-red-700">{card.erroDuplo}</p>}

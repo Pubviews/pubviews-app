@@ -12,139 +12,172 @@ export const runtime = "nodejs";
 // nesta rota. O plano Hobby aceita até 300s.
 export const maxDuration = 290;
 
+const encoder = new TextEncoder();
+
 /**
  * Igual à rota /api/variacoes/gerar, mas gera a narração e o material visual
  * (imagem ou vídeo stock) UMA vez só e monta as DUAS versões finais do vídeo
  * a partir deles — 1080x1920 (vertical) e 1080x1080 (quadrado) — sem gastar
  * cota das APIs de narração/imagem/vídeo duas vezes.
+ *
+ * Também em stream (NDJSON), pelo mesmo motivo da rota de formato único —
+ * ver comentário lá.
  */
 export async function POST(req: NextRequest) {
   const saidaVertical = novoArquivoDeSaida();
   const saidaQuadrado = novoArquivoDeSaida();
-  try {
-    const body = await req.json();
-    const texto: string = body.texto;
-    const formato: "imagem" | "video" | "video_original" =
-      body.formato === "video" ? "video" : body.formato === "video_original" ? "video_original" : "imagem";
-    const descricaoVisual: string = body.descricaoVisual || texto;
-    const textoOverlay: string | undefined = body.textoOverlay || undefined;
-    const voiceId: string | undefined = body.voiceId || undefined;
-    const videoOriginalUrl: string | undefined = body.videoOriginalUrl || undefined;
 
-    if (!texto) {
-      return NextResponse.json({ error: "Informe o texto da narração (texto)." }, { status: 400 });
-    }
-    if (formato === "video_original" && !videoOriginalUrl) {
-      return NextResponse.json(
-        { error: "Formato 'video_original' escolhido, mas nenhum vídeo original foi enviado (videoOriginalUrl)." },
-        { status: 400 }
-      );
-    }
-
-    const audioBuffer = await gerarNarracao(texto, voiceId);
-
-    if (formato === "imagem") {
-      const imagem = await gerarImagem(descricaoVisual);
-      const imagemBuffer = Buffer.from(imagem.base64, "base64");
-      await Promise.all([
-        montarVideoComImagem({
-          audioBuffer,
-          imagemBuffer,
-          textoOverlay,
-          saidaPath: saidaVertical,
-          formatoVideo: "vertical",
-        }),
-        montarVideoComImagem({
-          audioBuffer,
-          imagemBuffer,
-          textoOverlay,
-          saidaPath: saidaQuadrado,
-          formatoVideo: "quadrado",
-        }),
-      ]);
-    } else if (formato === "video_original") {
-      const respostaVideo = await fetch(videoOriginalUrl!);
-      if (!respostaVideo.ok) {
-        return NextResponse.json({ error: "Falha ao buscar o vídeo original enviado." }, { status: 502 });
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      function emitir(evento: Record<string, unknown>) {
+        controller.enqueue(encoder.encode(JSON.stringify(evento) + "\n"));
       }
-      const videoBuffer = Buffer.from(await respostaVideo.arrayBuffer());
-      // "conter" (sem cortar): o vídeo original pode ter texto/CTA já
-      // embutido na imagem — cortar as bordas (modo padrão) cortaria esse
-      // texto junto, deixando o resultado ruim (bug relatado pelo usuário).
-      // Nunca desenha o botão de overlay aqui: o vídeo original já tem o
-      // próprio CTA embutido na imagem, e sobrepor outro botão em cima
-      // ficava com os dois se cruzando (outro bug relatado pelo usuário).
-      await Promise.all([
-        montarVideoComVideo({
-          audioBuffer,
-          videoBuffer,
-          textoOverlay: undefined,
-          saidaPath: saidaVertical,
-          formatoVideo: "vertical",
-          ajusteDeQuadro: "conter",
-        }),
-        montarVideoComVideo({
-          audioBuffer,
-          videoBuffer,
-          textoOverlay: undefined,
-          saidaPath: saidaQuadrado,
-          formatoVideo: "quadrado",
-          ajusteDeQuadro: "conter",
-        }),
-      ]);
-    } else {
-      // O Pexels indexa o catálogo majoritariamente em inglês — traduz a
-      // descrição antes de buscar (mesma correção da rota de formato único).
-      let termoBusca = descricaoVisual;
+
       try {
-        const sugerido = await sugerirTermosDeBusca(descricaoVisual);
-        if (sugerido) termoBusca = sugerido;
-      } catch {
-        // mantém a descrição original se a sugestão falhar
+        const body = await req.json();
+        const texto: string = body.texto;
+        const formato: "imagem" | "video" | "video_original" =
+          body.formato === "video" ? "video" : body.formato === "video_original" ? "video_original" : "imagem";
+        const descricaoVisual: string = body.descricaoVisual || texto;
+        const textoOverlay: string | undefined = body.textoOverlay || undefined;
+        const voiceId: string | undefined = body.voiceId || undefined;
+        const videoOriginalUrl: string | undefined = body.videoOriginalUrl || undefined;
+
+        if (!texto) {
+          emitir({ tipo: "erro", error: "Informe o texto da narração (texto)." });
+          return;
+        }
+        if (formato === "video_original" && !videoOriginalUrl) {
+          emitir({
+            tipo: "erro",
+            error: "Formato 'video_original' escolhido, mas nenhum vídeo original foi enviado (videoOriginalUrl).",
+          });
+          return;
+        }
+
+        emitir({ tipo: "progresso", etapa: "narracao", mensagem: "Gerando narração...", pct: 5 });
+        const audioBuffer = await gerarNarracao(texto, voiceId);
+
+        if (formato === "imagem") {
+          emitir({ tipo: "progresso", etapa: "visual", mensagem: "Gerando imagem com IA...", pct: 15 });
+          const imagem = await gerarImagem(descricaoVisual);
+          const imagemBuffer = Buffer.from(imagem.base64, "base64");
+          emitir({ tipo: "progresso", etapa: "render", mensagem: "Renderizando os 2 formatos (vertical e quadrado)...", pct: 40 });
+          await Promise.all([
+            montarVideoComImagem({
+              audioBuffer,
+              imagemBuffer,
+              textoOverlay,
+              saidaPath: saidaVertical,
+              formatoVideo: "vertical",
+            }),
+            montarVideoComImagem({
+              audioBuffer,
+              imagemBuffer,
+              textoOverlay,
+              saidaPath: saidaQuadrado,
+              formatoVideo: "quadrado",
+            }),
+          ]);
+        } else if (formato === "video_original") {
+          emitir({ tipo: "progresso", etapa: "visual", mensagem: "Preparando o vídeo original...", pct: 15 });
+          const respostaVideo = await fetch(videoOriginalUrl!);
+          if (!respostaVideo.ok) {
+            emitir({ tipo: "erro", error: "Falha ao buscar o vídeo original enviado." });
+            return;
+          }
+          const videoBuffer = Buffer.from(await respostaVideo.arrayBuffer());
+          emitir({ tipo: "progresso", etapa: "render", mensagem: "Renderizando os 2 formatos (vertical e quadrado)...", pct: 40 });
+          // "conter" (sem cortar): o vídeo original pode ter texto/CTA já
+          // embutido na imagem — cortar as bordas (modo padrão) cortaria esse
+          // texto junto, deixando o resultado ruim (bug relatado pelo usuário).
+          // Nunca desenha o botão de overlay aqui: o vídeo original já tem o
+          // próprio CTA embutido na imagem, e sobrepor outro botão em cima
+          // ficava com os dois se cruzando (outro bug relatado pelo usuário).
+          await Promise.all([
+            montarVideoComVideo({
+              audioBuffer,
+              videoBuffer,
+              textoOverlay: undefined,
+              saidaPath: saidaVertical,
+              formatoVideo: "vertical",
+              ajusteDeQuadro: "conter",
+            }),
+            montarVideoComVideo({
+              audioBuffer,
+              videoBuffer,
+              textoOverlay: undefined,
+              saidaPath: saidaQuadrado,
+              formatoVideo: "quadrado",
+              ajusteDeQuadro: "conter",
+            }),
+          ]);
+        } else {
+          // O Pexels indexa o catálogo majoritariamente em inglês — traduz a
+          // descrição antes de buscar (mesma correção da rota de formato único).
+          emitir({ tipo: "progresso", etapa: "visual", mensagem: "Buscando vídeo de banco de imagens...", pct: 15 });
+          let termoBusca = descricaoVisual;
+          try {
+            const sugerido = await sugerirTermosDeBusca(descricaoVisual);
+            if (sugerido) termoBusca = sugerido;
+          } catch {
+            // mantém a descrição original se a sugestão falhar
+          }
+
+          const stock = await buscarVideoStock(termoBusca);
+          if (!stock) {
+            emitir({ tipo: "erro", error: `Nenhum vídeo encontrado no Pexels para: "${termoBusca}". Tente outra descrição.` });
+            return;
+          }
+          const videoBuffer = await baixarVideo(stock.url);
+          emitir({ tipo: "progresso", etapa: "render", mensagem: "Renderizando os 2 formatos (vertical e quadrado)...", pct: 40 });
+          await Promise.all([
+            montarVideoComVideo({
+              audioBuffer,
+              videoBuffer,
+              textoOverlay,
+              saidaPath: saidaVertical,
+              formatoVideo: "vertical",
+            }),
+            montarVideoComVideo({
+              audioBuffer,
+              videoBuffer,
+              textoOverlay,
+              saidaPath: saidaQuadrado,
+              formatoVideo: "quadrado",
+            }),
+          ]);
+        }
+
+        emitir({ tipo: "progresso", etapa: "finalizando", mensagem: "Finalizando os 2 vídeos...", pct: 90 });
+        const [bufVertical, bufQuadrado] = await Promise.all([
+          fs.readFile(saidaVertical),
+          fs.readFile(saidaQuadrado),
+        ]);
+        await Promise.all([fs.unlink(saidaVertical).catch(() => {}), fs.unlink(saidaQuadrado).catch(() => {})]);
+
+        emitir({
+          tipo: "concluido",
+          vertical: bufVertical.toString("base64"),
+          quadrado: bufQuadrado.toString("base64"),
+          pct: 100,
+        });
+      } catch (err) {
+        await fs.unlink(saidaVertical).catch(() => {});
+        await fs.unlink(saidaQuadrado).catch(() => {});
+        const message = err instanceof Error ? err.message : String(err);
+        emitir({ tipo: "erro", error: message });
+      } finally {
+        controller.close();
       }
+    },
+  });
 
-      const stock = await buscarVideoStock(termoBusca);
-      if (!stock) {
-        return NextResponse.json(
-          {
-            error: `Nenhum vídeo encontrado no Pexels para: "${termoBusca}". Tente outra descrição.`,
-          },
-          { status: 404 }
-        );
-      }
-      const videoBuffer = await baixarVideo(stock.url);
-      await Promise.all([
-        montarVideoComVideo({
-          audioBuffer,
-          videoBuffer,
-          textoOverlay,
-          saidaPath: saidaVertical,
-          formatoVideo: "vertical",
-        }),
-        montarVideoComVideo({
-          audioBuffer,
-          videoBuffer,
-          textoOverlay,
-          saidaPath: saidaQuadrado,
-          formatoVideo: "quadrado",
-        }),
-      ]);
-    }
-
-    const [bufVertical, bufQuadrado] = await Promise.all([
-      fs.readFile(saidaVertical),
-      fs.readFile(saidaQuadrado),
-    ]);
-    await Promise.all([fs.unlink(saidaVertical).catch(() => {}), fs.unlink(saidaQuadrado).catch(() => {})]);
-
-    return NextResponse.json({
-      vertical: bufVertical.toString("base64"),
-      quadrado: bufQuadrado.toString("base64"),
-    });
-  } catch (err) {
-    await fs.unlink(saidaVertical).catch(() => {});
-    await fs.unlink(saidaQuadrado).catch(() => {});
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  return new NextResponse(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+    },
+  });
 }
