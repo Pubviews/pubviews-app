@@ -23,6 +23,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <Link href="/variacoes" className="hover:text-zinc-950">
                 Variações
               </Link>
+              <Link href="/variacoes/historico" className="hover:text-zinc-950">
+                Histórico
+              </Link>
             </nav>
           </div>
         </header>

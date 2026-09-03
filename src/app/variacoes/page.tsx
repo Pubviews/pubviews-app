@@ -280,6 +280,9 @@ export default function VariacoesPage() {
       // do botão que já existe no vídeo.
       textoOverlay: card.formato === "video_original" ? undefined : card.textoOverlay || undefined,
       videoOriginalUrl: card.formato === "video_original" ? videoOriginalUrl || undefined : undefined,
+      // Só pra ficar salvo junto no histórico (não muda a geração em si).
+      nicho: nicho || undefined,
+      referencia: referencia || undefined,
     };
   }
 

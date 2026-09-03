@@ -4,6 +4,8 @@ import { gerarImagem, sugerirTermosDeBusca } from "@/lib/gemini";
 import { buscarVideoStock, baixarVideo } from "@/lib/pexels";
 import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida } from "@/lib/video";
 import { promises as fs } from "fs";
+import { put } from "@vercel/blob";
+import { salvarNoHistorico } from "@/lib/db";
 
 export const runtime = "nodejs";
 // Gera narração + visual UMA vez e renderiza DOIS vídeos com ffmpeg — mais
@@ -42,6 +44,8 @@ export async function POST(req: NextRequest) {
         const textoOverlay: string | undefined = body.textoOverlay || undefined;
         const voiceId: string | undefined = body.voiceId || undefined;
         const videoOriginalUrl: string | undefined = body.videoOriginalUrl || undefined;
+        const nicho: string | undefined = body.nicho || undefined;
+        const referencia: string | undefined = body.referencia || undefined;
 
         if (!texto) {
           emitir({ tipo: "erro", error: "Informe o texto da narração (texto)." });
@@ -156,10 +160,29 @@ export async function POST(req: NextRequest) {
         ]);
         await Promise.all([fs.unlink(saidaVertical).catch(() => {}), fs.unlink(saidaQuadrado).catch(() => {})]);
 
+        // Salva os 2 formatos no histórico (uma linha pra cada) — best-effort,
+        // igual à rota de formato único (ver comentário lá).
+        let historicoIdVertical: number | undefined;
+        let historicoIdQuadrado: number | undefined;
+        try {
+          const [blobVertical, blobQuadrado] = await Promise.all([
+            put(`historico/${Date.now()}-vertical.mp4`, bufVertical, { access: "public", contentType: "video/mp4" }),
+            put(`historico/${Date.now()}-quadrado.mp4`, bufQuadrado, { access: "public", contentType: "video/mp4" }),
+          ]);
+          [historicoIdVertical, historicoIdQuadrado] = await Promise.all([
+            salvarNoHistorico({ nicho, referencia, roteiro: texto, formato, formatoVideo: "vertical", videoUrl: blobVertical.url }),
+            salvarNoHistorico({ nicho, referencia, roteiro: texto, formato, formatoVideo: "quadrado", videoUrl: blobQuadrado.url }),
+          ]);
+        } catch (errHistorico) {
+          console.error("Falha ao salvar no histórico:", errHistorico);
+        }
+
         emitir({
           tipo: "concluido",
           vertical: bufVertical.toString("base64"),
           quadrado: bufQuadrado.toString("base64"),
+          historicoIdVertical,
+          historicoIdQuadrado,
           pct: 100,
         });
       } catch (err) {

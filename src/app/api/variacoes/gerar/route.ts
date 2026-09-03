@@ -4,6 +4,8 @@ import { gerarImagem, sugerirTermosDeBusca } from "@/lib/gemini";
 import { buscarVideoStock, baixarVideo } from "@/lib/pexels";
 import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida } from "@/lib/video";
 import { promises as fs } from "fs";
+import { put } from "@vercel/blob";
+import { salvarNoHistorico } from "@/lib/db";
 
 export const runtime = "nodejs";
 // Gerar narração + baixar/gerar visual + renderizar com ffmpeg pode passar de
@@ -42,6 +44,9 @@ export async function POST(req: NextRequest) {
         // navegador pro Blob, então aqui só busca o arquivo, sem esbarrar no
         // limite de tamanho de requisição das Vercel Functions (~4.5MB).
         const videoOriginalUrl: string | undefined = body.videoOriginalUrl || undefined;
+        // Só pra salvar no histórico (não afetam a geração em si).
+        const nicho: string | undefined = body.nicho || undefined;
+        const referencia: string | undefined = body.referencia || undefined;
 
         if (!texto) {
           emitir({ tipo: "erro", error: "Informe o texto da narração (texto)." });
@@ -111,7 +116,28 @@ export async function POST(req: NextRequest) {
         const videoFinal = await fs.readFile(saidaPath);
         await fs.unlink(saidaPath).catch(() => {});
 
-        emitir({ tipo: "concluido", videoBase64: videoFinal.toString("base64"), pct: 100 });
+        // Salva no histórico pra poder voltar depois/compartilhar — nunca
+        // derruba a geração se isso falhar (banco fora do ar, não
+        // configurado etc.): o usuário já tem o vídeo pronto de qualquer jeito.
+        let historicoId: number | undefined;
+        try {
+          const blob = await put(`historico/${Date.now()}-vertical.mp4`, videoFinal, {
+            access: "public",
+            contentType: "video/mp4",
+          });
+          historicoId = await salvarNoHistorico({
+            nicho,
+            referencia,
+            roteiro: texto,
+            formato,
+            formatoVideo: "vertical",
+            videoUrl: blob.url,
+          });
+        } catch (errHistorico) {
+          console.error("Falha ao salvar no histórico:", errHistorico);
+        }
+
+        emitir({ tipo: "concluido", videoBase64: videoFinal.toString("base64"), historicoId, pct: 100 });
       } catch (err) {
         await fs.unlink(saidaPath).catch(() => {});
         const message = err instanceof Error ? err.message : String(err);

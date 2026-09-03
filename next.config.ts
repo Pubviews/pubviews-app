@@ -11,6 +11,7 @@ const nextConfig: NextConfig = {
     "@napi-rs/canvas",
     "puppeteer-core",
     "@sparticuz/chromium",
+    "pg",
   ],
   // Os arquivos .br do Chromium (@sparticuz/chromium) são lidos em runtime
   // via caminho de arquivo (não via require/import), então o rastreador de
