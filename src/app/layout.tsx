@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import "./globals.css";
 
@@ -10,20 +11,28 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="pt-BR" className="h-full antialiased">
-      <body className="min-h-full flex flex-col bg-zinc-50 text-zinc-900">
+      <body className="min-h-full flex flex-col">
         <header className="border-b border-zinc-200 bg-white">
+          <div className="h-1 w-full bg-gradient-to-r from-brand-teal to-brand-green" />
           <div className="mx-auto max-w-5xl px-6 py-4 flex items-center justify-between">
-            <Link href="/" className="font-semibold text-lg tracking-tight text-zinc-900">
-              PubViews Tool
+            <Link href="/" className="flex items-center">
+              <Image
+                src="/logo/pubviews-logo-full.png"
+                alt="PubViews"
+                width={715}
+                height={164}
+                priority
+                className="h-8 w-auto"
+              />
             </Link>
             <nav className="flex gap-6 text-sm font-medium text-zinc-600">
-              <Link href="/garimpo" className="hover:text-zinc-950">
+              <Link href="/garimpo" className="hover:text-brand">
                 Garimpo
               </Link>
-              <Link href="/variacoes" className="hover:text-zinc-950">
+              <Link href="/variacoes" className="hover:text-brand">
                 Variações
               </Link>
-              <Link href="/variacoes/historico" className="hover:text-zinc-950">
+              <Link href="/variacoes/historico" className="hover:text-brand">
                 Histórico
               </Link>
             </nav>

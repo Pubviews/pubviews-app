@@ -443,7 +443,7 @@ export default function VariacoesPage() {
               onClick={analisarLinkBiblioteca}
               type="button"
               disabled={analisandoBiblioteca || !urlBiblioteca.trim()}
-              className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
             >
               {analisandoBiblioteca ? "Analisando..." : "Analisar anúncio"}
             </button>
@@ -500,7 +500,7 @@ export default function VariacoesPage() {
         <button
           onClick={gerarRoteiros}
           disabled={carregandoRoteiros || !referencia}
-          className="self-start rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
+          className="self-start rounded-md bg-brand px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
         >
           {carregandoRoteiros ? "Gerando roteiros..." : "Gerar roteiros"}
         </button>
@@ -601,14 +601,14 @@ export default function VariacoesPage() {
                 <button
                   onClick={() => gerarVideo(idx)}
                   disabled={card.gerando}
-                  className="flex-1 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+                  className="flex-1 rounded-md bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
                 >
                   {card.gerando ? "Gerando..." : "Gerar vídeo (vertical)"}
                 </button>
                 <button
                   onClick={() => gerarVideoDuploFormato(idx)}
                   disabled={card.gerandoDuplo}
-                  className="flex-1 rounded-md border border-zinc-900 px-4 py-2 text-sm font-medium text-zinc-900 disabled:opacity-40"
+                  className="flex-1 rounded-md border border-brand px-4 py-2 text-sm font-medium text-brand disabled:opacity-40"
                 >
                   {card.gerandoDuplo ? "Gerando..." : "Gerar nos 2 formatos"}
                 </button>
@@ -618,7 +618,7 @@ export default function VariacoesPage() {
                 <div className="mt-2">
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
                     <div
-                      className="h-full rounded-full bg-zinc-900 transition-all duration-300"
+                      className="h-full rounded-full bg-gradient-to-r from-brand-teal to-brand-green transition-all duration-300"
                       style={{ width: `${Math.max(4, card.progressoPct)}%` }}
                     />
                   </div>
@@ -631,7 +631,7 @@ export default function VariacoesPage() {
                 <div className="mt-2">
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-100">
                     <div
-                      className="h-full rounded-full bg-zinc-900 transition-all duration-300"
+                      className="h-full rounded-full bg-gradient-to-r from-brand-teal to-brand-green transition-all duration-300"
                       style={{ width: `${Math.max(4, card.progressoDuploPct)}%` }}
                     />
                   </div>
@@ -651,7 +651,7 @@ export default function VariacoesPage() {
                   <a
                     href={card.videoUrl}
                     download={`variacao-${idx + 1}.mp4`}
-                    className="mt-2 inline-block text-sm text-zinc-900 underline underline-offset-2"
+                    className="mt-2 inline-block text-sm text-brand underline underline-offset-2"
                   >
                     Baixar vídeo
                   </a>
@@ -667,7 +667,7 @@ export default function VariacoesPage() {
                       <a
                         href={card.videoUrlVertical}
                         download={`variacao-${idx + 1}-vertical.mp4`}
-                        className="mt-2 inline-block text-sm text-zinc-900 underline underline-offset-2"
+                        className="mt-2 inline-block text-sm text-brand underline underline-offset-2"
                       >
                         Baixar vertical
                       </a>
@@ -680,7 +680,7 @@ export default function VariacoesPage() {
                       <a
                         href={card.videoUrlQuadrado}
                         download={`variacao-${idx + 1}-quadrado.mp4`}
-                        className="mt-2 inline-block text-sm text-zinc-900 underline underline-offset-2"
+                        className="mt-2 inline-block text-sm text-brand underline underline-offset-2"
                       >
                         Baixar quadrado
                       </a>

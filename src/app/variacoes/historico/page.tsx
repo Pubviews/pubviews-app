@@ -100,7 +100,7 @@ export default function HistoricoPage() {
         <button
           onClick={() => carregar(true)}
           disabled={carregando}
-          className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
+          className="rounded-md bg-brand px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
         >
           {carregando && itens.length === 0 ? "Buscando..." : "Filtrar"}
         </button>
@@ -143,7 +143,7 @@ export default function HistoricoPage() {
                 <a
                   href={item.videoUrl}
                   download
-                  className="text-xs font-medium text-zinc-900 underline underline-offset-2"
+                  className="text-xs font-medium text-brand underline underline-offset-2"
                 >
                   Baixar
                 </a>

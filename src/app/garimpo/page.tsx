@@ -87,7 +87,7 @@ function CartaoDeTexto({
         <p className="text-sm text-zinc-800">{item.texto}</p>
         <button
           onClick={() => copiar(item.texto)}
-          className="shrink-0 text-xs text-zinc-500 hover:text-zinc-900"
+          className="shrink-0 text-xs text-zinc-500 hover:text-brand"
           title="Copiar texto original"
         >
           {copiado === item.texto ? "Copiado!" : "Copiar"}
@@ -117,7 +117,7 @@ function CartaoDeTexto({
               <p className="text-sm text-zinc-700">{v}</p>
               <button
                 onClick={() => copiar(v)}
-                className="shrink-0 text-xs text-zinc-500 hover:text-zinc-900"
+                className="shrink-0 text-xs text-zinc-500 hover:text-brand"
               >
                 {copiado === v ? "Copiado!" : "Copiar"}
               </button>
@@ -150,7 +150,7 @@ function ListaDeTextos({
   if (itens.length === 0) return null;
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-5">
-      <h3 className="text-sm font-semibold text-zinc-900">{titulo}</h3>
+      <h3 className="text-sm font-semibold text-brand">{titulo}</h3>
       <div className="mt-3 space-y-3">
         {itens.map((item, i) => (
           <CartaoDeTexto key={i} item={item} tipo={tipo} nicho={nicho} />
@@ -252,7 +252,7 @@ function GarimpoConteudo() {
         <button
           onClick={() => buscar()}
           disabled={loading || !searchTerms}
-          className="rounded-md bg-zinc-900 px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
+          className="rounded-md bg-brand px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
         >
           {loading ? "Buscando..." : "Buscar"}
         </button>
@@ -298,7 +298,7 @@ function GarimpoConteudo() {
                       href={r.link_biblioteca}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-zinc-900 underline underline-offset-2"
+                      className="text-brand underline underline-offset-2"
                     >
                       abrir
                     </a>
