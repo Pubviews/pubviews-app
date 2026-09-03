@@ -6,7 +6,11 @@ import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida } from "@
 import { promises as fs } from "fs";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Gera narração + visual UMA vez e renderiza DOIS vídeos com ffmpeg — mais
+// pesado que a rota de formato único, então precisa de ainda mais margem.
+// Confirmado nos logs da Vercel: vários "Task timed out after 60 seconds"
+// nesta rota. O plano Hobby aceita até 300s.
+export const maxDuration = 290;
 
 /**
  * Igual à rota /api/variacoes/gerar, mas gera a narração e o material visual

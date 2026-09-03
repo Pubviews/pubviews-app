@@ -6,7 +6,11 @@ import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida } from "@
 import { promises as fs } from "fs";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Gerar narração + baixar/gerar visual + renderizar com ffmpeg pode passar de
+// 60s (principalmente vídeo original/stock) — o plano Hobby da Vercel aceita
+// até 300s, então dá bastante margem (visto nos logs: vários timeouts reais
+// de "Task timed out after 60 seconds" nesta rota e na de 2 formatos).
+export const maxDuration = 280;
 
 export async function POST(req: NextRequest) {
   const saidaPath = novoArquivoDeSaida();
