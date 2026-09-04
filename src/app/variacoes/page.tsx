@@ -289,6 +289,31 @@ export default function VariacoesPage() {
     setFonteTextoNovo("padrao");
   }
 
+  // Sugere automaticamente, a partir do próprio vídeo, qual fonte (das 5
+  // disponíveis) mais parece com a que já era usada no criativo — só uma
+  // pré-seleção nos seletores de fonte (fonteTextoNovo/fonteTextoCorrigido)
+  // pra não obrigar o usuário a escolher toda vez; ele ainda pode trocar
+  // manualmente. Só aplica se o seletor ainda estiver no padrão (ou seja,
+  // não sobrescreve uma escolha manual que o usuário já tenha feito
+  // enquanto a sugestão ainda estava carregando). Falha silenciosa: é só
+  // conveniência, "Padrão" já funciona normalmente se isso não responder.
+  async function sugerirFontePeloVideo(url: string) {
+    try {
+      const res = await fetch("/api/variacoes/sugerir-fonte", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoUrl: url }),
+        signal: AbortSignal.timeout(30000),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.fonte) return;
+      setFonteTextoNovo((prev) => (prev === "padrao" ? json.fonte : prev));
+      setFonteTextoCorrigido((prev) => (prev === "padrao" ? json.fonte : prev));
+    } catch {
+      // silencioso — ver comentário acima
+    }
+  }
+
   async function aplicarRemocaoDeElemento() {
     if (!videoOriginalUrl || !regiaoParaApagar || regiaoParaApagar.w <= 0 || regiaoParaApagar.h <= 0) return;
     setAplicandoRemocao(true);
@@ -355,6 +380,8 @@ export default function VariacoesPage() {
     setErroEdicaoImagem(null);
     setRegiaoTextoImagem(null);
     setTextoCorrigido("");
+    setCorTextoCorrigido("#ffffff");
+    setFonteTextoCorrigido("padrao");
   }
 
   async function selecionarImagemReferencia(e: ChangeEvent<HTMLInputElement>) {
@@ -464,6 +491,7 @@ export default function VariacoesPage() {
       setDescricaoVisualOriginal(json.descricaoVisual || "");
       setReferencia(json.referencia || "");
       if (json.nicho) setNicho(json.nicho);
+      sugerirFontePeloVideo(resultado.url); // não espera — só pré-seleciona o seletor de fonte quando/se responder
     } catch (err) {
       const timeout = err instanceof Error && err.name === "TimeoutError";
       setErroAnaliseVideo(
@@ -527,6 +555,7 @@ export default function VariacoesPage() {
         setDescricaoVisualOriginal(json.descricaoVisualOriginal || "");
         limparRemocaoDeElemento();
         limparEdicaoDeImagem();
+        sugerirFontePeloVideo(json.videoOriginalUrl); // não espera — só pré-seleciona o seletor de fonte quando/se responder
       }
       if (json.imagemPreviewUrl) setImagemPreviewBiblioteca(json.imagemPreviewUrl);
       if (json.aviso) setAvisoBiblioteca(json.aviso);
@@ -800,7 +829,9 @@ export default function VariacoesPage() {
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="block text-xs text-zinc-500">Fonte</label>
+                      <label className="block text-xs text-zinc-500">
+                        Fonte <span className="font-normal text-zinc-400">(sugerida com base no vídeo — pode trocar)</span>
+                      </label>
                       <select
                         value={fonteTextoNovo}
                         onChange={(e) => setFonteTextoNovo(e.target.value)}

@@ -143,6 +143,41 @@ export async function editarImagemComIA(params: {
 }
 
 /**
+ * Sugere, a partir de um frame do vídeo/criativo original, qual das fontes
+ * disponíveis (ver listarOpcoesDeFonte em src/lib/video.ts) mais se parece
+ * com a fonte do texto que já estava no criativo — usada pra PRÉ-selecionar
+ * a fonte nos seletores de "reescrever/corrigir texto" (o usuário sempre
+ * pode trocar manualmente depois), em vez de sempre cair no padrão. Falha
+ * silenciosa é aceitável em quem chama isso: é só uma conveniência, não uma
+ * etapa obrigatória do fluxo.
+ */
+export async function sugerirFonteSemelhante(
+  imagemBase64: string,
+  mimeType: string,
+  opcoes: { id: string; label: string }[]
+): Promise<string> {
+  const listaOpcoes = opcoes.map((o) => `- "${o.id}": ${o.label}`).join("\n");
+  const prompt = `Esta imagem é um frame de um criativo de anúncio. Olhe para o texto principal/chamada (headline, botão de CTA etc.) já escrito na imagem e escolha, entre as opções de fonte abaixo, a que tem a aparência mais parecida com ela (grossura do traço, se é condensada/larga, se tem serifa, se é mais arredondada etc.):
+${listaOpcoes}
+
+Responda só com o id exato de uma das opções acima (ex: impacto), sem explicação, sem aspas, sem mais nada.`;
+
+  const json = await callGemini(TEXT_MODEL, {
+    contents: [
+      {
+        role: "user",
+        parts: [{ inlineData: { mimeType, data: imagemBase64 } }, { text: prompt }],
+      },
+    ],
+    generationConfig: { temperature: 0.1 },
+  });
+
+  const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  const idEscolhido = raw.trim().replace(/["'.]/g, "").toLowerCase();
+  return opcoes.some((o) => o.id === idEscolhido) ? idEscolhido : "padrao";
+}
+
+/**
  * Analisa um vídeo de criativo vencedor enviado pelo usuário (bytes em base64) e
  * extrai: o roteiro/estrutura pra preencher o campo de referência automaticamente,
  * um nicho sugerido, e uma descrição só da cena visual (usada depois pra decidir,
