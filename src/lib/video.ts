@@ -63,11 +63,17 @@ const FORMATOS: Record<FormatoVideo, { largura: number; altura: number }> = {
 const MARGEM_INFERIOR_PROPORCAO = 420 / 1920;
 
 // Posição vertical do selo e da seta no formato "vídeo stock" (ver
-// montarVideoComVideo) — usuário relatou que os dois ficavam "quase no
-// centro" do criativo com os valores antigos (seta a 48% da altura, selo
-// 180px acima do CTA), longe demais da base onde o CTA de verdade fica.
+// montarVideoComVideo) — usuário relatou (2x) que os dois ficavam "quase no
+// centro" do criativo, longe demais da base. Valores usados QUANDO TEM
+// botão de CTA na mesma geração — precisam de espaço suficiente acima do
+// CTA pra nunca sobrepor (testado com os dois juntos, animados).
 const SELO_OFFSET_ACIMA_CTA_PX = 130;
 const SETA_Y_PROPORCAO = 0.63;
+// Valores usados QUANDO NÃO TEM CTA — nesse caso não existe nada na base
+// pra evitar, então dá pra descer bem mais (quase até a margem que o CTA
+// usaria, se existisse).
+const SELO_OFFSET_ACIMA_CTA_PX_SEM_CTA = 40;
+const SETA_Y_PROPORCAO_SEM_CTA = 0.74;
 
 function tmpFile(ext: string): string {
   return path.join(os.tmpdir(), `pv-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
@@ -790,13 +796,16 @@ export async function montarVideoComVideo(
 
   // Título: faixa de largura inteira, perto do topo.
   aplicarOverlay(entradaTitulo, "0", `round(main_h*0.05)`);
-  // Selo: centralizado, um pouco acima de onde o CTA fica — offset menor que
-  // antes (SELO_OFFSET_ACIMA_CTA_PX, era 180) porque o usuário achou que
-  // selo/seta estavam "quase no centro" do criativo, longe demais da base.
-  aplicarOverlay(entradaSelo, "(main_w-overlay_w)/2", `main_h-${margemInferior}-${SELO_OFFSET_ACIMA_CTA_PX}`);
-  // Seta: lado direito, mais pra baixo que o centro (SETA_Y_PROPORCAO, era
-  // 0.48 — ficava bem no meio do criativo) — mesmo motivo acima.
-  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", `main_h*${SETA_Y_PROPORCAO}-overlay_h/2`);
+  // Selo e seta: quanto mais perto da base, melhor (usuário pediu 2x pra
+  // descer mais — "quase no centro do criativo") — mas o selo não pode
+  // encostar no botão de CTA quando os dois aparecem juntos. Sem CTA nessa
+  // geração, não tem nada pra evitar lá embaixo, então os dois descem bem
+  // mais (quase até a margem que o CTA usaria) do que quando o CTA existe.
+  const temCta = !!entradaBotao;
+  const seloOffsetAcimaCta = temCta ? SELO_OFFSET_ACIMA_CTA_PX : SELO_OFFSET_ACIMA_CTA_PX_SEM_CTA;
+  const setaYProporcao = temCta ? SETA_Y_PROPORCAO : SETA_Y_PROPORCAO_SEM_CTA;
+  aplicarOverlay(entradaSelo, "(main_w-overlay_w)/2", `main_h-${margemInferior}-${seloOffsetAcimaCta}`);
+  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", `main_h*${setaYProporcao}-overlay_h/2`);
   // Botão de CTA: mesma posição de sempre (base, centralizado).
   aplicarOverlay(entradaBotao, "(main_w-overlay_w)/2", `main_h-${margemInferior}`);
 
