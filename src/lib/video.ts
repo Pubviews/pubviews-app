@@ -252,15 +252,17 @@ async function extrairFrameDoVideo(vidPath: string): Promise<Buffer | null> {
  * verdade, com a cor escolhida automaticamente para contrastar com o
  * criativo em vez de uma cor fixa.
  */
-function renderBotaoPng(texto: string, corFundo: string, corTexto: string, fontSize = 46): Buffer {
+function renderBotaoPng(texto: string, corFundo: string, corTexto: string, fontSize = 46, fonteId = "padrao"): Buffer {
   garantirFonteRegistrada();
+  garantirFontesTextoRegistradas();
+  const fontFamily = (FONTES_TEXTO[fonteId] || FONTES_TEXTO.padrao).family;
 
   const paddingX = 52;
   const paddingY = 30;
   const raio = 22;
 
   const medindo = createCanvas(10, 10).getContext("2d");
-  medindo.font = `bold ${fontSize}px "${FONT_FAMILY}"`;
+  medindo.font = `bold ${fontSize}px "${fontFamily}"`;
   const larguraTexto = medindo.measureText(texto).width;
 
   const largura = Math.ceil(larguraTexto + paddingX * 2);
@@ -284,7 +286,7 @@ function renderBotaoPng(texto: string, corFundo: string, corTexto: string, fontS
   ctx.fill();
 
   ctx.fillStyle = corTexto;
-  ctx.font = `bold ${fontSize}px "${FONT_FAMILY}"`;
+  ctx.font = `bold ${fontSize}px "${fontFamily}"`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(texto, largura / 2, altura / 2 + 2);
@@ -344,8 +346,17 @@ function renderSetaPng(cor: string, altura = 120): Buffer {
  * um contorno escuro (stroke) grosso o bastante pra continuar legível em
  * cima de qualquer cena do vídeo, clara ou escura.
  */
-function renderFaixaDeTextoPng(texto: string, corTexto: string, corFundo: string, largura: number, semFundo = false): Buffer {
+function renderFaixaDeTextoPng(
+  texto: string,
+  corTexto: string,
+  corFundo: string,
+  largura: number,
+  semFundo = false,
+  fonteId = "padrao"
+): Buffer {
   garantirFonteRegistrada();
+  garantirFontesTextoRegistradas();
+  const fontFamily = (FONTES_TEXTO[fonteId] || FONTES_TEXTO.padrao).family;
 
   const altura = Math.round(largura * 0.12);
   const paddingX = Math.round(largura * 0.06);
@@ -354,7 +365,7 @@ function renderFaixaDeTextoPng(texto: string, corTexto: string, corFundo: string
   let fontSize = Math.round(altura * 0.5);
   const medindo = createCanvas(10, 10).getContext("2d");
   while (fontSize > 10) {
-    medindo.font = `bold ${fontSize}px "${FONT_FAMILY}"`;
+    medindo.font = `bold ${fontSize}px "${fontFamily}"`;
     if (medindo.measureText(texto).width <= larguraMax) break;
     fontSize -= 1;
   }
@@ -367,7 +378,7 @@ function renderFaixaDeTextoPng(texto: string, corTexto: string, corFundo: string
     ctx.fillRect(0, 0, largura, altura);
   }
 
-  ctx.font = `bold ${fontSize}px "${FONT_FAMILY}"`;
+  ctx.font = `bold ${fontSize}px "${fontFamily}"`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   if (semFundo) {
@@ -390,6 +401,8 @@ interface MontarVideoOpts {
   formatoVideo?: FormatoVideo;
   /** Animação do botão de CTA — "estatico" (padrão) quando não informado. */
   animacaoCta?: AnimacaoCta;
+  /** Fonte do texto do botão de CTA — "padrao" quando não informado (ver FONTES_TEXTO). */
+  fonteCta?: string;
 }
 
 /**
@@ -402,9 +415,9 @@ interface MontarVideoOpts {
  */
 export interface ElementosGraficos {
   /** Faixa de texto no topo (ex: título do anúncio) — sempre estática. */
-  tituloTopo?: { texto: string; corTexto: string; corFundo: string; semFundo?: boolean };
+  tituloTopo?: { texto: string; corTexto: string; corFundo: string; semFundo?: boolean; fonte?: string };
   /** Selo tipo "LIVE" (mesmo visual do botão de CTA, só que menor). */
-  selo?: { texto: string; corTexto: string; corFundo: string; animacao: AnimacaoCta };
+  selo?: { texto: string; corTexto: string; corFundo: string; animacao: AnimacaoCta; fonte?: string };
   /** Seta apontando pra baixo, do lado direito. */
   seta?: { cor: string; animacao: AnimacaoCta };
 }
@@ -473,7 +486,8 @@ async function prepararEntradaBotao(
   textoOverlay: string | undefined,
   amostraParaCor: Buffer | null,
   animacao: AnimacaoCta,
-  duracaoSegundos: number
+  duracaoSegundos: number,
+  fonteId = "padrao"
 ): Promise<EntradaDeBotao | null> {
   if (!textoOverlay) return null;
 
@@ -487,7 +501,7 @@ async function prepararEntradaBotao(
     }
   }
 
-  const botaoBuffer = renderBotaoPng(textoOverlay, corEscolhida.hex, corEscolhida.texto);
+  const botaoBuffer = renderBotaoPng(textoOverlay, corEscolhida.hex, corEscolhida.texto, 46, fonteId);
   return animarPng(botaoBuffer, animacao, duracaoSegundos);
 }
 
@@ -613,7 +627,8 @@ export async function montarVideoComImagem(
     opts.textoOverlay,
     opts.imagemBuffer,
     opts.animacaoCta ?? "estatico",
-    duration
+    duration,
+    opts.fonteCta
   );
 
   const fps = 30;
@@ -691,7 +706,8 @@ export async function montarVideoComVideo(
     opts.textoOverlay,
     frameParaCor,
     opts.animacaoCta ?? "estatico",
-    duration
+    duration,
+    opts.fonteCta
   );
 
   // Elementos gráficos extras (só relevantes no fluxo de "vídeo stock" — ver
@@ -707,7 +723,8 @@ export async function montarVideoComVideo(
           elementos.tituloTopo.corTexto,
           elementos.tituloTopo.corFundo,
           W,
-          elementos.tituloTopo.semFundo
+          elementos.tituloTopo.semFundo,
+          elementos.tituloTopo.fonte
         ),
         "estatico",
         duration
@@ -715,7 +732,7 @@ export async function montarVideoComVideo(
     : null;
   const entradaSelo = elementos?.selo?.texto
     ? await animarPng(
-        renderBotaoPng(elementos.selo.texto, elementos.selo.corFundo, elementos.selo.corTexto, 34),
+        renderBotaoPng(elementos.selo.texto, elementos.selo.corFundo, elementos.selo.corTexto, 34, elementos.selo.fonte),
         elementos.selo.animacao,
         duration
       )

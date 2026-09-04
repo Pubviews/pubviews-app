@@ -48,6 +48,7 @@ function lerElementosGraficos(valor: unknown): ElementosGraficos | undefined {
         corTexto: typeof t.corTexto === "string" && t.corTexto ? t.corTexto : "#ffffff",
         corFundo: typeof t.corFundo === "string" && t.corFundo ? t.corFundo : "#111111",
         semFundo: t.semFundo === true,
+        fonte: typeof t.fonte === "string" ? t.fonte : undefined,
       };
     }
   }
@@ -60,6 +61,7 @@ function lerElementosGraficos(valor: unknown): ElementosGraficos | undefined {
         corTexto: typeof s.corTexto === "string" && s.corTexto ? s.corTexto : "#ffffff",
         corFundo: typeof s.corFundo === "string" && s.corFundo ? s.corFundo : "#e53935",
         animacao: lerAnimacaoCta(s.animacao),
+        fonte: typeof s.fonte === "string" ? s.fonte : undefined,
       };
     }
   }
@@ -98,6 +100,7 @@ export async function POST(req: NextRequest) {
         const descricaoVisual: string = body.descricaoVisual || texto;
         const textoOverlay: string | undefined = body.textoOverlay || undefined;
         const animacaoCta = lerAnimacaoCta(body.animacaoCta);
+        const fonteCta: string | undefined = typeof body.fonteCta === "string" ? body.fonteCta : undefined;
         // Só usados no formato "video" (banco de imagens) — ver lerElementosGraficos.
         const elementosGraficos = lerElementosGraficos(body.elementos);
         const voiceId: string | undefined = body.voiceId || undefined;
@@ -129,7 +132,7 @@ export async function POST(req: NextRequest) {
           const imagem = await gerarImagem(descricaoVisual);
           const imagemBuffer = Buffer.from(imagem.base64, "base64");
           emitir({ tipo: "progresso", etapa: "render", mensagem: "Montando o vídeo...", pct: 55 });
-          await montarVideoComImagem({ audioBuffer, imagemBuffer, textoOverlay, animacaoCta, saidaPath });
+          await montarVideoComImagem({ audioBuffer, imagemBuffer, textoOverlay, animacaoCta, fonteCta, saidaPath });
         } else if (formato === "video_original") {
           // Reaproveita o vídeo original enviado pelo usuário como visual — só a
           // narração é nova, a cena continua sendo a do criativo vencedor de
@@ -188,6 +191,7 @@ export async function POST(req: NextRequest) {
             videoBuffer,
             textoOverlay,
             animacaoCta,
+            fonteCta,
             saidaPath,
             elementos: elementosGraficos,
           });

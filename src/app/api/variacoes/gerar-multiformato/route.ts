@@ -46,6 +46,7 @@ function lerElementosGraficos(valor: unknown): ElementosGraficos | undefined {
         corTexto: typeof t.corTexto === "string" && t.corTexto ? t.corTexto : "#ffffff",
         corFundo: typeof t.corFundo === "string" && t.corFundo ? t.corFundo : "#111111",
         semFundo: t.semFundo === true,
+        fonte: typeof t.fonte === "string" ? t.fonte : undefined,
       };
     }
   }
@@ -58,6 +59,7 @@ function lerElementosGraficos(valor: unknown): ElementosGraficos | undefined {
         corTexto: typeof s.corTexto === "string" && s.corTexto ? s.corTexto : "#ffffff",
         corFundo: typeof s.corFundo === "string" && s.corFundo ? s.corFundo : "#e53935",
         animacao: lerAnimacaoCta(s.animacao),
+        fonte: typeof s.fonte === "string" ? s.fonte : undefined,
       };
     }
   }
@@ -99,6 +101,7 @@ export async function POST(req: NextRequest) {
         const descricaoVisual: string = body.descricaoVisual || texto;
         const textoOverlay: string | undefined = body.textoOverlay || undefined;
         const animacaoCta = lerAnimacaoCta(body.animacaoCta);
+        const fonteCta: string | undefined = typeof body.fonteCta === "string" ? body.fonteCta : undefined;
         // Só usados no formato "video" (banco de imagens) — ver lerElementosGraficos.
         const elementosGraficos = lerElementosGraficos(body.elementos);
         const voiceId: string | undefined = body.voiceId || undefined;
@@ -132,6 +135,7 @@ export async function POST(req: NextRequest) {
               imagemBuffer,
               textoOverlay,
               animacaoCta,
+              fonteCta,
               saidaPath: saidaVertical,
               formatoVideo: "vertical",
             }),
@@ -140,6 +144,7 @@ export async function POST(req: NextRequest) {
               imagemBuffer,
               textoOverlay,
               animacaoCta,
+              fonteCta,
               saidaPath: saidaQuadrado,
               formatoVideo: "quadrado",
             }),
@@ -210,6 +215,7 @@ export async function POST(req: NextRequest) {
               videoBuffer,
               textoOverlay,
               animacaoCta,
+              fonteCta,
               saidaPath: saidaVertical,
               formatoVideo: "vertical",
               elementos: elementosGraficos,
@@ -219,6 +225,7 @@ export async function POST(req: NextRequest) {
               videoBuffer,
               textoOverlay,
               animacaoCta,
+              fonteCta,
               saidaPath: saidaQuadrado,
               formatoVideo: "quadrado",
               elementos: elementosGraficos,

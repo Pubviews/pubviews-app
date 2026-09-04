@@ -172,6 +172,9 @@ interface CardVariacao {
   descricaoVisual: string;
   textoOverlay: string;
   animacaoCta: AnimacaoCta;
+  // Fonte do texto do botão de CTA (uma das 5 opções — ver FONTES_TEXTO em
+  // src/lib/video.ts). "padrao" quando o usuário não escolhe outra.
+  fonteCta: string;
   // Elementos gráficos extras (só usados no formato "video" — banco de
   // imagens), desenhados pelo nosso motor por cima do vídeo stock: título no
   // topo, selo tipo "LIVE" e seta, todos opcionais e independentes.
@@ -180,10 +183,12 @@ interface CardVariacao {
   corFundoTitulo: string;
   // Variação sem a faixa colorida atrás do título — só o texto por cima do vídeo.
   tituloSemFundo: boolean;
+  fonteTitulo: string;
   seloTexto: string;
   corSelo: string;
   corTextoSelo: string;
   animacaoSelo: AnimacaoCta;
+  fonteSelo: string;
   setaAtiva: boolean;
   corSeta: string;
   animacaoSeta: AnimacaoCta;
@@ -616,14 +621,17 @@ export default function VariacoesPage() {
         // já sai variado (dá pra ver qual anima melhor pra esse criativo),
         // com o seletor abaixo pra trocar manualmente se quiser.
         animacaoCta: i % 2 === 0 ? "pulsar" : "piscar",
+        fonteCta: "padrao",
         tituloTopo: "",
         corTituloTopo: "#ffffff",
         corFundoTitulo: "#111111",
         tituloSemFundo: false,
+        fonteTitulo: "padrao",
         seloTexto: "",
         corSelo: "#e53935",
         corTextoSelo: "#ffffff",
         animacaoSelo: "pulsar",
+        fonteSelo: "padrao",
         setaAtiva: false,
         corSeta: "#ffd600",
         animacaoSeta: "saltar",
@@ -662,6 +670,7 @@ export default function VariacoesPage() {
       // do botão que já existe no vídeo.
       textoOverlay: card.formato === "video_original" ? undefined : card.textoOverlay || undefined,
       animacaoCta: card.formato === "video_original" ? undefined : card.animacaoCta,
+      fonteCta: card.formato === "video_original" ? undefined : card.fonteCta,
       // Título/selo/seta: só fazem sentido no vídeo de banco de imagens (o
       // vídeo original já tem os próprios elementos embutidos, e a imagem
       // estática é gerada pela IA já com tudo pedido na descrição).
@@ -674,6 +683,7 @@ export default function VariacoesPage() {
                     corTexto: card.corTituloTopo,
                     corFundo: card.corFundoTitulo,
                     semFundo: card.tituloSemFundo,
+                    fonte: card.fonteTitulo,
                   }
                 : undefined,
               selo: card.seloTexto.trim()
@@ -682,6 +692,7 @@ export default function VariacoesPage() {
                     corTexto: card.corTextoSelo,
                     corFundo: card.corSelo,
                     animacao: card.animacaoSelo,
+                    fonte: card.fonteSelo,
                   }
                 : undefined,
               seta: card.setaAtiva ? { cor: card.corSeta, animacao: card.animacaoSeta } : undefined,
@@ -1259,6 +1270,22 @@ export default function VariacoesPage() {
                       </select>
                     </div>
                   )}
+                  {card.textoOverlay && (
+                    <div className="sm:w-44">
+                      <label className="block text-xs font-medium text-zinc-500">Fonte do botão</label>
+                      <select
+                        value={card.fonteCta}
+                        onChange={(e) => atualizarCard(idx, { fonteCta: e.target.value })}
+                        className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="padrao">Padrão (sem serifa)</option>
+                        <option value="impacto">Impacto (condensada, tipo cartaz)</option>
+                        <option value="condensada">Condensada (caixa alta)</option>
+                        <option value="elegante">Elegante (serifada)</option>
+                        <option value="moderna">Moderna (arredondada)</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1313,6 +1340,22 @@ export default function VariacoesPage() {
                         Sem fundo (só o texto, direto por cima do vídeo)
                       </label>
                     )}
+                    {card.tituloTopo && (
+                      <div className="mt-1 sm:w-44">
+                        <label className="block text-[10px] text-zinc-400">Fonte</label>
+                        <select
+                          value={card.fonteTitulo}
+                          onChange={(e) => atualizarCard(idx, { fonteTitulo: e.target.value })}
+                          className="w-full rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
+                        >
+                          <option value="padrao">Padrão (sem serifa)</option>
+                          <option value="impacto">Impacto (condensada, tipo cartaz)</option>
+                          <option value="condensada">Condensada (caixa alta)</option>
+                          <option value="elegante">Elegante (serifada)</option>
+                          <option value="moderna">Moderna (arredondada)</option>
+                        </select>
+                      </div>
+                    )}
                   </div>
 
                   <div className="mt-3">
@@ -1354,6 +1397,20 @@ export default function VariacoesPage() {
                               <option value="pulsar">Pulsar</option>
                               <option value="piscar">Piscar</option>
                               <option value="estatico">Sem animação</option>
+                            </select>
+                          </div>
+                          <div className="sm:w-44">
+                            <label className="block text-[10px] text-zinc-400">Fonte</label>
+                            <select
+                              value={card.fonteSelo}
+                              onChange={(e) => atualizarCard(idx, { fonteSelo: e.target.value })}
+                              className="w-full rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
+                            >
+                              <option value="padrao">Padrão (sem serifa)</option>
+                              <option value="impacto">Impacto (condensada, tipo cartaz)</option>
+                              <option value="condensada">Condensada (caixa alta)</option>
+                              <option value="elegante">Elegante (serifada)</option>
+                              <option value="moderna">Moderna (arredondada)</option>
                             </select>
                           </div>
                         </>
