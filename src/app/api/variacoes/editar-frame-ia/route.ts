@@ -76,10 +76,26 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Quando o usuário vai escrever um texto novo por cima (abaixo), a
+    // região marcada precisa estar LIMPA no resultado da IA — senão o texto
+    // antigo que já estava ali (a IA não apaga nada que não foi pedido)
+    // fica visível por baixo/misturado com o texto novo que a gente desenha.
+    // Em vez de pedir pra IA escrever o texto (ela erra ortografia), pede só
+    // pra apagar/limpar essa área — a parte em que IA generativa é boa de
+    // verdade — e a gente escreve o texto certo por cima depois.
+    let instrucaoFinal = instrucao;
+    if (regiaoTexto && textoNovo) {
+      const x1 = Math.round(regiaoTexto.x * 100);
+      const y1 = Math.round(regiaoTexto.y * 100);
+      const x2 = Math.round((regiaoTexto.x + regiaoTexto.w) * 100);
+      const y2 = Math.round((regiaoTexto.y + regiaoTexto.h) * 100);
+      instrucaoFinal += ` Além disso, apague completamente qualquer texto que já exista na região aproximada entre ${x1}% e ${x2}% da largura e ${y1}% e ${y2}% da altura da imagem (contando da esquerda/topo), preenchendo o fundo dessa região de forma natural, sem deixar nenhuma letra ou palavra antiga visível ali — um texto novo será escrito nessa mesma área depois, por fora desta edição, então ela precisa ficar limpa.`;
+    }
+
     const editada = await editarImagemComIA({
       imagemBase64: frameBuffer.toString("base64"),
       mimeType: "image/png",
-      instrucao,
+      instrucao: instrucaoFinal,
       imagemReferenciaBase64,
       mimeTypeReferencia,
     });
