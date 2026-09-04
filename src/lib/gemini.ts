@@ -408,7 +408,13 @@ export async function sugerirTermosDeBusca(descricao: string): Promise<string> {
         role: "user",
         parts: [
           {
-            text: `Dê 2 a 4 palavras-chave em inglês para buscar um vídeo de banco de imagens (stock video) que combine com esta cena: "${descricao}". Responda só as palavras-chave, sem explicação.`,
+            text:
+              `Dê 2 a 4 palavras-chave em inglês para buscar um vídeo de banco de imagens (stock video) que combine com esta cena: "${descricao}".\n\n` +
+              `Regras importantes:\n` +
+              `- Se a cena menciona um esporte, time, liga ou lugar específico (ex: "futebol americano", "NFL", "basquete"), mantenha esse termo específico e literal nas palavras-chave (ex: "american football", não apenas "sports" ou "athlete") — buscas genéricas demais trazem vídeo de outro esporte ou de academia/alongamento, sem nada a ver com o pedido.\n` +
+              `- Coloque a palavra-chave mais específica e importante primeiro.\n` +
+              `- Prefira substantivos concretos e comuns em bancos de vídeo (ex: "stadium", "game", "crowd", "field") a frases publicitárias.\n\n` +
+              `Responda só as palavras-chave, sem explicação.`,
           },
         ],
       },
