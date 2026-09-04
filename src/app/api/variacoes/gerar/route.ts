@@ -93,17 +93,19 @@ export async function POST(req: NextRequest) {
           // pelo usuário). Nunca desenha o botão de overlay aqui: o vídeo
           // original já tem o próprio CTA embutido na imagem, e sobrepor outro
           // botão em cima ficava com os dois se cruzando (outro bug relatado).
-          // remixarVisual: sem isso, esse formato saía praticamente idêntico ao
-          // vídeo original (só a narração mudava) — outro feedback do usuário.
-          // Aplica um retoque leve (corte fino de borda, cor/contraste/matiz,
-          // vinheta, fundo sólido em vez de desfoque) sorteado a cada geração.
+          // remixarVisual DESLIGADO: chegou a ficar ligado (retoque de
+          // cor/contraste/matiz/vinheta sorteado a cada geração), mas o
+          // usuário agora edita o vídeo original manualmente antes de subir
+          // (via os fluxos de IA acima, na tela de variações) — então esse
+          // retoque automático só atrapalhava (deixava o vídeo escuro por
+          // cima de uma edição que já tinha sido feita com cuidado).
           await montarVideoComVideo({
             audioBuffer,
             videoBuffer,
             textoOverlay: undefined,
             saidaPath,
             ajusteDeQuadro: "conter",
-            remixarVisual: true,
+            remixarVisual: false,
           });
         } else {
           // O Pexels indexa o catálogo majoritariamente em inglês — buscar com a
