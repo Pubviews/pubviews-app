@@ -804,6 +804,42 @@ export async function sobreporImagemFixa(
   return resultado;
 }
 
+/**
+ * Sobrepõe um texto (já renderizado por renderTextoEmCaixaPng) numa IMAGEM
+ * (não vídeo) numa posição em pixels — usada pra "corrigir"/escrever um
+ * texto preciso por cima do resultado da IA de edição de imagem (Gemini),
+ * já que IA generativa não é confiável pra ortografia/tipografia (mesmo
+ * motivo de sobreporImagemFixa, usada no fluxo de apagar elemento). Ao
+ * contrário dela (que trabalha em cima de um VÍDEO via ffmpeg), aqui as
+ * duas entradas já são imagens — dá pra compor direto com canvas, sem
+ * precisar do ffmpeg.
+ */
+export async function sobreporTextoEmImagem(
+  imagemBuffer: Buffer,
+  textoPngBuffer: Buffer,
+  posicao: { x: number; y: number }
+): Promise<Buffer> {
+  const base = await loadImage(imagemBuffer);
+  const textoImg = await loadImage(textoPngBuffer);
+  const canvas = createCanvas(base.width, base.height);
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(base, 0, 0, base.width, base.height);
+  ctx.drawImage(textoImg, posicao.x, posicao.y);
+  return canvas.toBuffer("image/png");
+}
+
+/**
+ * Lê largura/altura reais de uma imagem (buffer PNG/JPEG) — usada pra
+ * calcular a posição em pixels de uma região normalizada (0 a 1) marcada
+ * sobre ela, quando a imagem em questão não é necessariamente do mesmo
+ * tamanho do vídeo original (ex: a imagem editada pela IA do Gemini, que
+ * pode voltar em outra resolução — ver editar-frame-ia/route.ts).
+ */
+export async function obterDimensoesDaImagem(imagemBuffer: Buffer): Promise<{ largura: number; altura: number }> {
+  const img = await loadImage(imagemBuffer);
+  return { largura: img.width, altura: img.height };
+}
+
 /** As opções de fonte disponíveis pra "reescrever texto" — pra popular o seletor no front. */
 export function listarOpcoesDeFonte(): { id: string; label: string }[] {
   return Object.entries(FONTES_TEXTO).map(([id, opcao]) => ({ id, label: opcao.label }));

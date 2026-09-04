@@ -338,12 +338,23 @@ export default function VariacoesPage() {
   const [enviandoImagemReferencia, setEnviandoImagemReferencia] = useState(false);
   const [aplicandoEdicaoImagem, setAplicandoEdicaoImagem] = useState(false);
   const [erroEdicaoImagem, setErroEdicaoImagem] = useState<string | null>(null);
+  // Correção de texto por cima do resultado da IA (opcional): texto é o
+  // ponto fraco conhecido de IA generativa de imagem (erra ortografia), então
+  // em vez de confiar na IA pro texto, o usuário marca a área e escreve o
+  // texto exato — a gente desenha ele mesmo (mesmo motor da correção de
+  // texto no fluxo de apagar elemento), por cima do resultado da IA.
+  const [regiaoTextoImagem, setRegiaoTextoImagem] = useState<RegiaoNormalizada | null>(null);
+  const [textoCorrigido, setTextoCorrigido] = useState("");
+  const [corTextoCorrigido, setCorTextoCorrigido] = useState("#ffffff");
+  const [fonteTextoCorrigido, setFonteTextoCorrigido] = useState("padrao");
 
   function limparEdicaoDeImagem() {
     setInstrucaoEdicaoImagem("");
     setImagemReferenciaUrl(null);
     setImagemReferenciaNome(null);
     setErroEdicaoImagem(null);
+    setRegiaoTextoImagem(null);
+    setTextoCorrigido("");
   }
 
   async function selecionarImagemReferencia(e: ChangeEvent<HTMLInputElement>) {
@@ -380,6 +391,13 @@ export default function VariacoesPage() {
           videoUrl: videoOriginalUrl,
           instrucao: instrucaoEdicaoImagem.trim(),
           imagemReferenciaUrl: imagemReferenciaUrl || undefined,
+          regiaoTexto:
+            textoCorrigido.trim() && regiaoTextoImagem && regiaoTextoImagem.w > 0 && regiaoTextoImagem.h > 0
+              ? regiaoTextoImagem
+              : undefined,
+          textoNovo: textoCorrigido.trim() ? textoCorrigido.trim() : undefined,
+          corTexto: corTextoCorrigido,
+          fonte: fonteTextoCorrigido,
         }),
         signal: AbortSignal.timeout(110000),
       });
@@ -879,6 +897,63 @@ export default function VariacoesPage() {
                 >
                   remover referência
                 </button>
+              )}
+            </div>
+
+            <div className="mt-4 border-t border-zinc-200 pt-3">
+              <label className="block text-xs font-medium text-zinc-500">
+                Corrigir/escrever um texto por cima do resultado (opcional — recomendado se a
+                instrução acima envolve mudar algum texto)
+              </label>
+              <p className="mt-1 text-xs text-zinc-500">
+                IA generativa erra ortografia com frequência. Pra texto sair certo, não peça pra
+                IA escrever o texto na instrução acima — em vez disso, marque abaixo a área onde
+                ele vai ficar (no resultado da IA) e escreva o texto exato aqui: a gente desenha
+                ele por cima, com fonte e cor à sua escolha.
+              </p>
+              <div className="mt-2">
+                <SeletorDeMascara
+                  key={videoOriginalUrl}
+                  videoUrl={videoOriginalUrl}
+                  regiao={regiaoTextoImagem}
+                  onRegiaoChange={setRegiaoTextoImagem}
+                />
+              </div>
+              {regiaoTextoImagem && regiaoTextoImagem.w > 0 && regiaoTextoImagem.h > 0 && (
+                <div className="mt-2 flex flex-wrap items-end gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs text-zinc-500">Texto</label>
+                    <input
+                      value={textoCorrigido}
+                      onChange={(e) => setTextoCorrigido(e.target.value)}
+                      placeholder="ex: FREE NFL LIVE"
+                      className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-zinc-500">Cor</label>
+                    <input
+                      type="color"
+                      value={corTextoCorrigido}
+                      onChange={(e) => setCorTextoCorrigido(e.target.value)}
+                      className="mt-1 h-9 w-14 rounded-md border border-zinc-300"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs text-zinc-500">Fonte</label>
+                    <select
+                      value={fonteTextoCorrigido}
+                      onChange={(e) => setFonteTextoCorrigido(e.target.value)}
+                      className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm"
+                    >
+                      <option value="padrao">Padrão (sem serifa)</option>
+                      <option value="impacto">Impacto (condensada, tipo cartaz)</option>
+                      <option value="condensada">Condensada (caixa alta)</option>
+                      <option value="elegante">Elegante (serifada)</option>
+                      <option value="moderna">Moderna (arredondada)</option>
+                    </select>
+                  </div>
+                </div>
               )}
             </div>
 

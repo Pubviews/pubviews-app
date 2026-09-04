@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { put } from "@vercel/blob";
-import { obterDimensoesDoVideo, extrairFrameComoImagem, montarVideoEstaticoDeImagem } from "@/lib/video";
+import {
+  obterDimensoesDoVideo,
+  extrairFrameComoImagem,
+  montarVideoEstaticoDeImagem,
+  obterDimensoesDaImagem,
+  renderTextoEmCaixaPng,
+  sobreporTextoEmImagem,
+} from "@/lib/video";
 import { editarImagemComIA } from "@/lib/gemini";
 
 export const runtime = "nodejs";
@@ -20,6 +27,14 @@ export const maxDuration = 120;
  * remonta um vídeo estático (mesma duração do original) com o resultado —
  * que fica no MESMO lugar (videoOriginalUrlEditado) usado pelo caminho da
  * WaveSpeedAI, então o resto do app nem precisa saber qual dos dois foi usado.
+ *
+ * Opcionalmente, além da instrução pra IA, o usuário pode marcar uma região
+ * (regiaoTexto, coords normalizadas 0-1) e um texto exato (textoNovo) pra
+ * ESCREVER POR CIMA do resultado da IA — texto é o ponto fraco conhecido de
+ * IA generativa de imagem (erra ortografia/tipografia), então em vez de
+ * confiar na IA pro texto, a gente desenha ele mesmo (mesmo motor usado no
+ * fluxo de apagar elemento) depois que a IA já fez a edição visual (troca de
+ * ícone etc.).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -27,6 +42,10 @@ export async function POST(req: NextRequest) {
     const videoUrl: string | undefined = body.videoUrl;
     const instrucao: string | undefined = typeof body.instrucao === "string" ? body.instrucao.trim() : undefined;
     const imagemReferenciaUrl: string | undefined = body.imagemReferenciaUrl || undefined;
+    const regiaoTexto: { x: number; y: number; w: number; h: number } | undefined = body.regiaoTexto || undefined;
+    const textoNovo: string | undefined = typeof body.textoNovo === "string" ? body.textoNovo.trim() : undefined;
+    const corTexto: string = typeof body.corTexto === "string" && body.corTexto ? body.corTexto : "#ffffff";
+    const fonte: string = typeof body.fonte === "string" && body.fonte ? body.fonte : "padrao";
 
     if (!videoUrl) {
       return NextResponse.json({ error: "Informe videoUrl." }, { status: 400 });
@@ -64,7 +83,20 @@ export async function POST(req: NextRequest) {
       imagemReferenciaBase64,
       mimeTypeReferencia,
     });
-    const imagemEditadaBuffer = Buffer.from(editada.base64, "base64");
+    let imagemEditadaBuffer: Buffer = Buffer.from(editada.base64, "base64");
+
+    if (regiaoTexto && textoNovo) {
+      // A imagem que voltou da IA pode não ter exatamente a mesma resolução
+      // do vídeo original — usa as dimensões DELA (não as do vídeo) pra
+      // converter a região normalizada em pixels certos.
+      const dimensoesImagem = await obterDimensoesDaImagem(imagemEditadaBuffer);
+      const caixaX = Math.round(regiaoTexto.x * dimensoesImagem.largura);
+      const caixaY = Math.round(regiaoTexto.y * dimensoesImagem.altura);
+      const caixaW = Math.round(regiaoTexto.w * dimensoesImagem.largura);
+      const caixaH = Math.round(regiaoTexto.h * dimensoesImagem.altura);
+      const textoPng = renderTextoEmCaixaPng(textoNovo, corTexto, caixaW, caixaH, fonte);
+      imagemEditadaBuffer = await sobreporTextoEmImagem(imagemEditadaBuffer, textoPng, { x: caixaX, y: caixaY });
+    }
 
     const videoResultado = await montarVideoEstaticoDeImagem(imagemEditadaBuffer, dimensoes.duracaoSegundos);
 
