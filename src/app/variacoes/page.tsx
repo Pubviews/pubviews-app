@@ -758,6 +758,13 @@ export default function VariacoesPage() {
               segundo de vídeo) e demora cerca de 3 minutos, mas só precisa ser feito UMA vez: o
               resultado vale pra todas as variações que reaproveitarem esse vídeo.
             </p>
+            <p className="mt-1 text-xs font-medium text-amber-700">
+              Atenção: essa opção e a de &quot;editar com IA de imagem&quot; abaixo são
+              alternativas, não somam — as duas partem sempre do vídeo original e a que você
+              aplicar por último substitui o resultado da outra. Pra combinar remoção/texto E
+              edição de elementos, use só o painel de baixo (ele já tem um campo pra corrigir
+              texto também).
+            </p>
 
             <SeletorDeMascara
               key={videoOriginalUrl}
@@ -864,6 +871,12 @@ export default function VariacoesPage() {
               resultado vira o vídeo usado em toda variação com &quot;Vídeo original enviado&quot;
               — se o vídeo tiver movimento real de cena, essa opção não é indicada (use a de
               apagar elemento acima).
+            </p>
+            <p className="mt-1 text-xs font-medium text-amber-700">
+              Atenção: essa opção substitui qualquer resultado do painel &quot;Apagar elemento&quot;
+              acima (as duas partem do vídeo original, não uma da outra). Pra combinar edição de
+              elementos com uma correção de texto, use o campo &quot;Corrigir/escrever um
+              texto&quot; abaixo, na mesma aplicação — não o painel de cima.
             </p>
 
             <textarea
