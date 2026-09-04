@@ -324,6 +324,82 @@ export default function VariacoesPage() {
     }
   }
 
+  // Caminho alternativo — edição de IMAGEM com IA (Gemini): melhor quando o
+  // "vídeo original" é, na prática, uma imagem/card parado (sem movimento de
+  // cena) — dá pra trocar/inserir elementos com muito mais precisão do que
+  // edição de vídeo (categoria de IA ainda imatura pra isso). O usuário
+  // descreve em texto o que quer mudar, com uma imagem de referência opcional
+  // do elemento novo. Escreve no MESMO videoOriginalUrlEditado usado pelo
+  // caminho de apagar-elemento acima — o resto do app não precisa saber qual
+  // dos dois foi usado.
+  const [instrucaoEdicaoImagem, setInstrucaoEdicaoImagem] = useState("");
+  const [imagemReferenciaUrl, setImagemReferenciaUrl] = useState<string | null>(null);
+  const [imagemReferenciaNome, setImagemReferenciaNome] = useState<string | null>(null);
+  const [enviandoImagemReferencia, setEnviandoImagemReferencia] = useState(false);
+  const [aplicandoEdicaoImagem, setAplicandoEdicaoImagem] = useState(false);
+  const [erroEdicaoImagem, setErroEdicaoImagem] = useState<string | null>(null);
+
+  function limparEdicaoDeImagem() {
+    setInstrucaoEdicaoImagem("");
+    setImagemReferenciaUrl(null);
+    setImagemReferenciaNome(null);
+    setErroEdicaoImagem(null);
+  }
+
+  async function selecionarImagemReferencia(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+
+    setEnviandoImagemReferencia(true);
+    setErroEdicaoImagem(null);
+    try {
+      const resultado = await upload(file.name, file, {
+        access: "public",
+        handleUploadUrl: "/api/variacoes/imagem-upload",
+        abortSignal: AbortSignal.timeout(30000),
+      });
+      setImagemReferenciaUrl(resultado.url);
+      setImagemReferenciaNome(file.name);
+    } catch (err) {
+      setErroEdicaoImagem(err instanceof Error ? err.message : String(err));
+    } finally {
+      setEnviandoImagemReferencia(false);
+    }
+  }
+
+  async function aplicarEdicaoComImagemIA() {
+    if (!videoOriginalUrl || !instrucaoEdicaoImagem.trim()) return;
+    setAplicandoEdicaoImagem(true);
+    setErroEdicaoImagem(null);
+    try {
+      const res = await fetch("/api/variacoes/editar-frame-ia", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          videoUrl: videoOriginalUrl,
+          instrucao: instrucaoEdicaoImagem.trim(),
+          imagemReferenciaUrl: imagemReferenciaUrl || undefined,
+        }),
+        signal: AbortSignal.timeout(110000),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Erro ao editar a imagem com IA.");
+      setVideoOriginalUrlEditado(json.videoUrl);
+    } catch (err) {
+      const timeout = err instanceof Error && err.name === "TimeoutError";
+      setErroEdicaoImagem(
+        timeout
+          ? "A edição demorou demais e foi cancelada. Tente de novo."
+          : err instanceof Error
+            ? err.message
+            : String(err)
+      );
+    } finally {
+      setAplicandoEdicaoImagem(false);
+    }
+  }
+
   async function selecionarVideoOriginal(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ""; // permite selecionar o mesmo arquivo de novo depois
@@ -340,6 +416,7 @@ export default function VariacoesPage() {
     setErroAnaliseVideo(null);
     setDescricaoVisualOriginal(null);
     limparRemocaoDeElemento();
+    limparEdicaoDeImagem();
     try {
       // Sobe o arquivo direto do navegador pro Vercel Blob — não passa pelo
       // corpo de nenhuma função nossa, então não esbarra no limite de ~4.5MB
@@ -389,6 +466,7 @@ export default function VariacoesPage() {
     setDescricaoVisualOriginal(null);
     setErroAnaliseVideo(null);
     limparRemocaoDeElemento();
+    limparEdicaoDeImagem();
   }
 
   // Link de um anúncio específico da Ad Library que o usuário encontrou
@@ -430,6 +508,7 @@ export default function VariacoesPage() {
         setVideoOriginalNome(`Anúncio da Ad Library${json.pageName ? " — " + json.pageName : ""}`);
         setDescricaoVisualOriginal(json.descricaoVisualOriginal || "");
         limparRemocaoDeElemento();
+        limparEdicaoDeImagem();
       }
       if (json.imagemPreviewUrl) setImagemPreviewBiblioteca(json.imagemPreviewUrl);
       if (json.aviso) setAvisoBiblioteca(json.aviso);
@@ -746,6 +825,89 @@ export default function VariacoesPage() {
                 <p className="text-sm text-green-700">
                   Elemento removido — esse vídeo (já editado) vai ser usado em toda variação com
                   &quot;Vídeo original enviado&quot;.
+                </p>
+                <video src={videoOriginalUrlEditado} controls className="mt-2 max-h-64 rounded-md border border-zinc-200" />
+              </div>
+            )}
+          </div>
+        )}
+
+        {videoOriginalUrl && !analisandoVideo && (
+          <div className="rounded-md border border-dashed border-zinc-300 p-3">
+            <label className="block text-sm font-medium text-zinc-700">
+              Ou edite o vídeo com IA de imagem — troque/altere elementos (opcional)
+            </label>
+            <p className="mt-1 text-xs text-zinc-500">
+              Pra criativos que são, na prática, uma imagem parada (sem movimento de cena):
+              descreva em texto o que quer mudar (ex: &quot;troque o logo do certificado por um
+              ícone de medalha dourada&quot;, &quot;mude o texto do topo pra fonte itálica em
+              vermelho&quot;) e a IA (Gemini) edita a imagem mantendo o resto igual. Opcionalmente
+              anexe uma imagem de referência do elemento novo. É rápido (menos de 1 min) e o
+              resultado vira o vídeo usado em toda variação com &quot;Vídeo original enviado&quot;
+              — se o vídeo tiver movimento real de cena, essa opção não é indicada (use a de
+              apagar elemento acima).
+            </p>
+
+            <textarea
+              value={instrucaoEdicaoImagem}
+              onChange={(e) => setInstrucaoEdicaoImagem(e.target.value)}
+              placeholder="ex: troque o logo do certificado por um ícone de medalha dourada"
+              rows={2}
+              className="mt-2 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+            />
+
+            <div className="mt-2 flex items-center gap-3">
+              <input
+                type="file"
+                accept="image/*"
+                onChange={selecionarImagemReferencia}
+                disabled={enviandoImagemReferencia}
+                className="text-sm"
+              />
+              {enviandoImagemReferencia && <span className="text-xs text-zinc-500">Enviando imagem...</span>}
+              {imagemReferenciaNome && !enviandoImagemReferencia && (
+                <span className="text-xs text-green-700">Referência: {imagemReferenciaNome}</span>
+              )}
+              {imagemReferenciaUrl && (
+                <button
+                  onClick={() => {
+                    setImagemReferenciaUrl(null);
+                    setImagemReferenciaNome(null);
+                  }}
+                  type="button"
+                  className="text-xs text-zinc-500 underline underline-offset-2"
+                >
+                  remover referência
+                </button>
+              )}
+            </div>
+
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                onClick={aplicarEdicaoComImagemIA}
+                type="button"
+                disabled={aplicandoEdicaoImagem || !instrucaoEdicaoImagem.trim()}
+                className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              >
+                {aplicandoEdicaoImagem ? "Aplicando IA..." : "Aplicar edição com IA"}
+              </button>
+              {(instrucaoEdicaoImagem || imagemReferenciaUrl) && (
+                <button
+                  onClick={limparEdicaoDeImagem}
+                  type="button"
+                  disabled={aplicandoEdicaoImagem}
+                  className="text-xs text-zinc-500 underline underline-offset-2 disabled:opacity-40"
+                >
+                  limpar seleção
+                </button>
+              )}
+            </div>
+            {erroEdicaoImagem && <p className="mt-2 text-sm text-red-700">{erroEdicaoImagem}</p>}
+            {videoOriginalUrlEditado && !aplicandoEdicaoImagem && !aplicandoRemocao && (
+              <div className="mt-3">
+                <p className="text-sm text-green-700">
+                  Vídeo editado — esse vídeo vai ser usado em toda variação com &quot;Vídeo
+                  original enviado&quot;.
                 </p>
                 <video src={videoOriginalUrlEditado} controls className="mt-2 max-h-64 rounded-md border border-zinc-200" />
               </div>

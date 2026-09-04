@@ -613,29 +613,90 @@ export function novoArquivoDeSaida(): string {
 export interface DimensoesVideo {
   largura: number;
   altura: number;
+  duracaoSegundos: number;
 }
 
 /**
- * Lê as dimensões reais (em pixels) de um vídeo com ffprobe — em vez de
+ * Lê as dimensões e a duração reais de um vídeo com ffprobe — em vez de
  * confiar só no que o navegador reportou, pra máscara/overlay e vídeo
- * baterem certinho. Usada tanto pra gerar a máscara de remoção quanto pra
- * posicionar o texto novo (ver funções abaixo).
+ * baterem certinho. Usada pra gerar a máscara de remoção, posicionar o texto
+ * novo, e (duração) pra montar o vídeo estático de uma imagem editada por IA
+ * (ver funções abaixo).
  */
 export async function obterDimensoesDoVideo(videoBuffer: Buffer): Promise<DimensoesVideo> {
   const vidPath = tmpFile("mp4");
   await fs.writeFile(vidPath, videoBuffer);
   try {
-    const dimensoes = await new Promise<{ width?: number; height?: number }>((resolve, reject) => {
+    const dados = await new Promise<{ width?: number; height?: number; duration?: number }>((resolve, reject) => {
       ffmpeg.ffprobe(vidPath, (err, data) => {
         if (err) return reject(err);
         const streamDeVideo = data.streams.find((s) => s.codec_type === "video");
-        resolve({ width: streamDeVideo?.width, height: streamDeVideo?.height });
+        resolve({ width: streamDeVideo?.width, height: streamDeVideo?.height, duration: data.format.duration });
       });
     });
-    return { largura: dimensoes.width || 1080, altura: dimensoes.height || 1920 };
+    return {
+      largura: dados.width || 1080,
+      altura: dados.height || 1920,
+      duracaoSegundos: dados.duration || 15,
+    };
   } finally {
     await fs.unlink(vidPath).catch(() => {});
   }
+}
+
+/**
+ * Extrai um frame (meio do vídeo) como imagem PNG, a partir dos bytes do
+ * vídeo — usada pra pegar um frame representativo pra editar como imagem
+ * (ver src/app/api/variacoes/editar-frame-ia/route.ts). Reaproveita
+ * extrairFrameDoVideo (já usada internamente pra amostra de cor do botão).
+ */
+export async function extrairFrameComoImagem(videoBuffer: Buffer): Promise<Buffer> {
+  const vidPath = tmpFile("mp4");
+  await fs.writeFile(vidPath, videoBuffer);
+  try {
+    const frame = await extrairFrameDoVideo(vidPath);
+    if (!frame) throw new Error("Não consegui extrair um frame do vídeo pra editar.");
+    return frame;
+  } finally {
+    await fs.unlink(vidPath).catch(() => {});
+  }
+}
+
+/**
+ * Monta um vídeo "estático" (a mesma imagem do início ao fim, sem zoom) a
+ * partir de uma imagem já editada — usada quando o vídeo original era, na
+ * prática, uma imagem/card parado (ver editarImagemComIA em src/lib/gemini.ts):
+ * em vez de reconstruir com efeito de zoom (que mudaria a "cara" do
+ * original), mantém o mesmo estilo estático de antes. Sem áudio — a
+ * narração é adicionada depois, no mesmo pipeline que já processa o "vídeo
+ * original" normalmente (montarVideoComVideo, via videoOriginalUrlEditado).
+ */
+export async function montarVideoEstaticoDeImagem(imagemBuffer: Buffer, duracaoSegundos: number): Promise<Buffer> {
+  const imgPath = tmpFile("png");
+  const outPath = tmpFile("mp4");
+  await fs.writeFile(imgPath, imagemBuffer);
+
+  await new Promise<void>((resolve, reject) => {
+    ffmpeg()
+      .input(imgPath)
+      .inputOptions(["-loop 1"])
+      .outputOptions([
+        `-t ${Math.max(0.5, duracaoSegundos)}`,
+        "-vf",
+        "scale=trunc(iw/2)*2:trunc(ih/2)*2", // largura/altura pares — exigido pelo libx264/yuv420p
+        "-c:v libx264",
+        "-pix_fmt yuv420p",
+        "-r 24",
+      ])
+      .save(outPath)
+      .on("end", () => resolve())
+      .on("error", (err) => reject(err));
+  });
+
+  const resultado = await fs.readFile(outPath);
+  await fs.unlink(imgPath).catch(() => {});
+  await fs.unlink(outPath).catch(() => {});
+  return resultado;
 }
 
 /**

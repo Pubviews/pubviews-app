@@ -93,6 +93,56 @@ export async function gerarImagem(descricao: string): Promise<{ base64: string; 
 }
 
 /**
+ * Edita uma imagem existente (ex: um frame extraído de um "vídeo original"
+ * que na prática é uma imagem/card estático) seguindo uma instrução em texto
+ * — troca de ícone, mudança de texto, cor, etc. — mantendo o resto da imagem
+ * como está. Opcionalmente aceita uma imagem de referência do elemento novo
+ * (ex: "troque esse ícone pelo que está nessa outra imagem").
+ *
+ * Diferente da edição de VÍDEO (WaveSpeedAI, que só apaga), edição de IMAGEM
+ * é a categoria de IA madura o bastante pra trocar/inserir elementos com
+ * precisão — foi o que o usuário testou funcionando bem no ChatGPT.
+ */
+export async function editarImagemComIA(params: {
+  imagemBase64: string;
+  mimeType: string;
+  instrucao: string;
+  imagemReferenciaBase64?: string;
+  mimeTypeReferencia?: string;
+}): Promise<{ base64: string; mimeType: string }> {
+  const partes: Array<Record<string, unknown>> = [
+    { inlineData: { mimeType: params.mimeType, data: params.imagemBase64 } },
+  ];
+  if (params.imagemReferenciaBase64) {
+    partes.push({
+      inlineData: { mimeType: params.mimeTypeReferencia || "image/png", data: params.imagemReferenciaBase64 },
+    });
+  }
+
+  const instrucaoCompleta = params.imagemReferenciaBase64
+    ? `Esta é uma peça de anúncio (criativo). Edite a PRIMEIRA imagem seguindo esta instrução: "${params.instrucao}". Use a SEGUNDA imagem só como referência visual do elemento novo a inserir/trocar (o estilo/forma dela, não a cole como está). Mantenha tudo o resto da primeira imagem — layout, logos, textos não mencionados, cores, proporção da imagem — exatamente como está, mudando só o que foi pedido.`
+    : `Esta é uma peça de anúncio (criativo). Edite esta imagem seguindo esta instrução: "${params.instrucao}". Mantenha tudo o resto — layout, logos, textos não mencionados, cores, proporção da imagem — exatamente como está, mudando só o que foi pedido.`;
+  partes.push({ text: instrucaoCompleta });
+
+  const json = await callGemini(
+    IMAGE_MODEL,
+    {
+      contents: [{ role: "user", parts: partes }],
+      generationConfig: { responseModalities: ["IMAGE"] },
+    },
+    60000
+  );
+
+  const parts = json.candidates?.[0]?.content?.parts ?? [];
+  for (const part of parts) {
+    if (part.inlineData?.data) {
+      return { base64: part.inlineData.data, mimeType: part.inlineData.mimeType || "image/png" };
+    }
+  }
+  throw new Error("Gemini não retornou uma imagem editada. Resposta: " + JSON.stringify(json).slice(0, 500));
+}
+
+/**
  * Analisa um vídeo de criativo vencedor enviado pelo usuário (bytes em base64) e
  * extrai: o roteiro/estrutura pra preencher o campo de referência automaticamente,
  * um nicho sugerido, e uma descrição só da cena visual (usada depois pra decidir,
