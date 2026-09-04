@@ -164,7 +164,7 @@ function SeletorDeMascara({
 }
 
 type Formato = "imagem" | "video" | "video_original";
-type AnimacaoCta = "estatico" | "pulsar" | "piscar";
+type AnimacaoCta = "estatico" | "pulsar" | "piscar" | "saltar";
 
 interface CardVariacao {
   texto: string;
@@ -172,6 +172,19 @@ interface CardVariacao {
   descricaoVisual: string;
   textoOverlay: string;
   animacaoCta: AnimacaoCta;
+  // Elementos gráficos extras (só usados no formato "video" — banco de
+  // imagens), desenhados pelo nosso motor por cima do vídeo stock: título no
+  // topo, selo tipo "LIVE" e seta, todos opcionais e independentes.
+  tituloTopo: string;
+  corTituloTopo: string;
+  corFundoTitulo: string;
+  seloTexto: string;
+  corSelo: string;
+  corTextoSelo: string;
+  animacaoSelo: AnimacaoCta;
+  setaAtiva: boolean;
+  corSeta: string;
+  animacaoSeta: AnimacaoCta;
   gerando: boolean;
   erro: string | null;
   videoUrl: string | null;
@@ -601,6 +614,16 @@ export default function VariacoesPage() {
         // já sai variado (dá pra ver qual anima melhor pra esse criativo),
         // com o seletor abaixo pra trocar manualmente se quiser.
         animacaoCta: i % 2 === 0 ? "pulsar" : "piscar",
+        tituloTopo: "",
+        corTituloTopo: "#ffffff",
+        corFundoTitulo: "#111111",
+        seloTexto: "",
+        corSelo: "#e53935",
+        corTextoSelo: "#ffffff",
+        animacaoSelo: "pulsar",
+        setaAtiva: false,
+        corSeta: "#ffd600",
+        animacaoSeta: "saltar",
         gerando: false,
         erro: null,
         videoUrl: null,
@@ -636,6 +659,26 @@ export default function VariacoesPage() {
       // do botão que já existe no vídeo.
       textoOverlay: card.formato === "video_original" ? undefined : card.textoOverlay || undefined,
       animacaoCta: card.formato === "video_original" ? undefined : card.animacaoCta,
+      // Título/selo/seta: só fazem sentido no vídeo de banco de imagens (o
+      // vídeo original já tem os próprios elementos embutidos, e a imagem
+      // estática é gerada pela IA já com tudo pedido na descrição).
+      elementos:
+        card.formato === "video"
+          ? {
+              tituloTopo: card.tituloTopo.trim()
+                ? { texto: card.tituloTopo.trim(), corTexto: card.corTituloTopo, corFundo: card.corFundoTitulo }
+                : undefined,
+              selo: card.seloTexto.trim()
+                ? {
+                    texto: card.seloTexto.trim(),
+                    corTexto: card.corTextoSelo,
+                    corFundo: card.corSelo,
+                    animacao: card.animacaoSelo,
+                  }
+                : undefined,
+              seta: card.setaAtiva ? { cor: card.corSeta, animacao: card.animacaoSeta } : undefined,
+            }
+          : undefined,
       // Prioriza a versão já com o elemento removido pela IA (quando o
       // usuário aplicou essa remoção) — senão cai no vídeo original de
       // sempre, que ainda passa pelo retoque visual (cor/corte/vinheta).
@@ -1208,6 +1251,131 @@ export default function VariacoesPage() {
                       </select>
                     </div>
                   )}
+                </div>
+              )}
+
+              {card.formato === "video" && (
+                <div className="mt-3 rounded-md border border-dashed border-zinc-300 p-3">
+                  <p className="text-xs font-medium text-zinc-500">
+                    Elementos gráficos extras (opcional) — desenhados por nós (sem IA) por cima do
+                    vídeo de banco de imagens, já que ele não tem nada disso embutido.
+                  </p>
+
+                  <div className="mt-2">
+                    <label className="block text-xs text-zinc-500">Título (faixa no topo)</label>
+                    <div className="mt-1 flex flex-col gap-2 sm:flex-row">
+                      <input
+                        value={card.tituloTopo}
+                        onChange={(e) => atualizarCard(idx, { tituloTopo: e.target.value })}
+                        placeholder="ex: APP TO WATCH NFL LIVE"
+                        className="flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                      />
+                      {card.tituloTopo && (
+                        <div className="flex items-center gap-2">
+                          <div>
+                            <label className="block text-[10px] text-zinc-400">Texto</label>
+                            <input
+                              type="color"
+                              value={card.corTituloTopo}
+                              onChange={(e) => atualizarCard(idx, { corTituloTopo: e.target.value })}
+                              className="h-9 w-10 rounded-md border border-zinc-300"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-zinc-400">Fundo</label>
+                            <input
+                              type="color"
+                              value={card.corFundoTitulo}
+                              onChange={(e) => atualizarCard(idx, { corFundoTitulo: e.target.value })}
+                              className="h-9 w-10 rounded-md border border-zinc-300"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <label className="block text-xs text-zinc-500">Selo (ex: &quot;LIVE&quot;)</label>
+                    <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-end">
+                      <input
+                        value={card.seloTexto}
+                        onChange={(e) => atualizarCard(idx, { seloTexto: e.target.value })}
+                        placeholder="ex: LIVE"
+                        className="flex-1 rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                      />
+                      {card.seloTexto && (
+                        <>
+                          <div>
+                            <label className="block text-[10px] text-zinc-400">Fundo</label>
+                            <input
+                              type="color"
+                              value={card.corSelo}
+                              onChange={(e) => atualizarCard(idx, { corSelo: e.target.value })}
+                              className="h-9 w-10 rounded-md border border-zinc-300"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-zinc-400">Texto</label>
+                            <input
+                              type="color"
+                              value={card.corTextoSelo}
+                              onChange={(e) => atualizarCard(idx, { corTextoSelo: e.target.value })}
+                              className="h-9 w-10 rounded-md border border-zinc-300"
+                            />
+                          </div>
+                          <div className="sm:w-36">
+                            <label className="block text-[10px] text-zinc-400">Animação</label>
+                            <select
+                              value={card.animacaoSelo}
+                              onChange={(e) => atualizarCard(idx, { animacaoSelo: e.target.value as AnimacaoCta })}
+                              className="w-full rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
+                            >
+                              <option value="pulsar">Pulsar</option>
+                              <option value="piscar">Piscar</option>
+                              <option value="estatico">Sem animação</option>
+                            </select>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <label className="flex items-center gap-2 text-xs text-zinc-500">
+                      <input
+                        type="checkbox"
+                        checked={card.setaAtiva}
+                        onChange={(e) => atualizarCard(idx, { setaAtiva: e.target.checked })}
+                      />
+                      Seta apontando pra baixo
+                    </label>
+                    {card.setaAtiva && (
+                      <div className="mt-1 flex items-end gap-2">
+                        <div>
+                          <label className="block text-[10px] text-zinc-400">Cor</label>
+                          <input
+                            type="color"
+                            value={card.corSeta}
+                            onChange={(e) => atualizarCard(idx, { corSeta: e.target.value })}
+                            className="h-9 w-10 rounded-md border border-zinc-300"
+                          />
+                        </div>
+                        <div className="w-36">
+                          <label className="block text-[10px] text-zinc-400">Animação</label>
+                          <select
+                            value={card.animacaoSeta}
+                            onChange={(e) => atualizarCard(idx, { animacaoSeta: e.target.value as AnimacaoCta })}
+                            className="w-full rounded-md border border-zinc-300 bg-white px-2 py-2 text-sm"
+                          >
+                            <option value="saltar">Saltar</option>
+                            <option value="pulsar">Pulsar</option>
+                            <option value="estatico">Sem animação</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 

@@ -239,10 +239,9 @@ async function extrairFrameDoVideo(vidPath: string): Promise<Buffer | null> {
  * verdade, com a cor escolhida automaticamente para contrastar com o
  * criativo em vez de uma cor fixa.
  */
-function renderBotaoPng(texto: string, corFundo: string, corTexto: string): Buffer {
+function renderBotaoPng(texto: string, corFundo: string, corTexto: string, fontSize = 46): Buffer {
   garantirFonteRegistrada();
 
-  const fontSize = 46;
   const paddingX = 52;
   const paddingY = 30;
   const raio = 22;
@@ -280,6 +279,82 @@ function renderBotaoPng(texto: string, corFundo: string, corTexto: string): Buff
   return canvas.toBuffer("image/png");
 }
 
+/**
+ * Desenha uma seta apontando pra baixo (haste + ponta triangular), como um
+ * PNG com transparência — elemento gráfico GENÉRICO (não tenta imitar nenhum
+ * ícone/logo específico), pensado pra chamar atenção pro CTA/selo abaixo
+ * dela num "vídeo stock" (fundo real do Pexels, sem o elemento embutido que
+ * o vídeo original tinha). Um contorno escuro sutil garante leitura mesmo
+ * sobre fundos claros.
+ */
+function renderSetaPng(cor: string, altura = 120): Buffer {
+  const largura = Math.round(altura * 0.72);
+  const espessuraHaste = Math.round(largura * 0.32);
+  const alturaPonta = Math.round(altura * 0.42);
+
+  const canvas = createCanvas(largura, altura);
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = cor;
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.lineWidth = Math.max(2, Math.round(largura * 0.05));
+  ctx.lineJoin = "round";
+
+  ctx.beginPath();
+  // Haste (retângulo vertical, centralizado).
+  const hasteX = (largura - espessuraHaste) / 2;
+  const alturaHaste = altura - alturaPonta;
+  ctx.moveTo(hasteX, 0);
+  ctx.lineTo(hasteX + espessuraHaste, 0);
+  ctx.lineTo(hasteX + espessuraHaste, alturaHaste);
+  // Ponta triangular.
+  ctx.lineTo(largura, alturaHaste);
+  ctx.lineTo(largura / 2, altura);
+  ctx.lineTo(0, alturaHaste);
+  ctx.lineTo(hasteX, alturaHaste);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  return canvas.toBuffer("image/png");
+}
+
+/**
+ * Desenha uma faixa (banner) de texto de largura fixa — pensada pro título
+ * no topo do vídeo (ex: "APP TO WATCH NFL LIVE") num "vídeo stock". Sempre
+ * estática (sem animação): título costuma ficar melhor parado, é o
+ * selo/seta abaixo dele que chamam o movimento.
+ */
+function renderFaixaDeTextoPng(texto: string, corTexto: string, corFundo: string, largura: number): Buffer {
+  garantirFonteRegistrada();
+
+  const altura = Math.round(largura * 0.12);
+  const paddingX = Math.round(largura * 0.06);
+  const larguraMax = largura - paddingX * 2;
+
+  let fontSize = Math.round(altura * 0.5);
+  const medindo = createCanvas(10, 10).getContext("2d");
+  while (fontSize > 10) {
+    medindo.font = `bold ${fontSize}px "${FONT_FAMILY}"`;
+    if (medindo.measureText(texto).width <= larguraMax) break;
+    fontSize -= 1;
+  }
+
+  const canvas = createCanvas(largura, altura);
+  const ctx = canvas.getContext("2d");
+
+  ctx.fillStyle = corFundo;
+  ctx.fillRect(0, 0, largura, altura);
+
+  ctx.fillStyle = corTexto;
+  ctx.font = `bold ${fontSize}px "${FONT_FAMILY}"`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(texto, largura / 2, altura / 2 + 2, larguraMax);
+
+  return canvas.toBuffer("image/png");
+}
+
 interface MontarVideoOpts {
   audioBuffer: Buffer;
   textoOverlay?: string;
@@ -288,6 +363,23 @@ interface MontarVideoOpts {
   formatoVideo?: FormatoVideo;
   /** Animação do botão de CTA — "estatico" (padrão) quando não informado. */
   animacaoCta?: AnimacaoCta;
+}
+
+/**
+ * Elementos gráficos extras, opcionais, só usados no fluxo de "vídeo stock"
+ * (ver montarVideoComVideo + gerar/route.ts) — pensados pra repor, com
+ * formas/textos GENÉRICOS desenhados pelo nosso próprio motor (nunca por IA
+ * generativa, pelo mesmo motivo de tudo mais nesse app: precisão de texto),
+ * o tipo de elemento que o vídeo ORIGINAL tinha embutido na imagem (título,
+ * selo "LIVE", seta) e que um vídeo de banco de imagens não tem.
+ */
+export interface ElementosGraficos {
+  /** Faixa de texto no topo (ex: título do anúncio) — sempre estática. */
+  tituloTopo?: { texto: string; corTexto: string; corFundo: string };
+  /** Selo tipo "LIVE" (mesmo visual do botão de CTA, só que menor). */
+  selo?: { texto: string; corTexto: string; corFundo: string; animacao: AnimacaoCta };
+  /** Seta apontando pra baixo, do lado direito. */
+  seta?: { cor: string; animacao: AnimacaoCta };
 }
 
 /**
@@ -305,7 +397,10 @@ export type AjusteDeQuadro = "cobrir" | "conter";
 // "batimento") — chama atenção sem ficar irritante.
 // "piscar": a opacidade oscila entre bem visível e mais apagado — pisca,
 // sem nunca sumir de vez (evita parecer um bug).
-export type AnimacaoCta = "estatico" | "pulsar" | "piscar";
+// "saltar": o elemento sobe e volta pra posição de descanso, num ciclo mais
+// rápido (efeito de "chamar atenção pra baixo") — pensado pra seta/ícone
+// apontando (ver renderSetaPng), mas funciona pra qualquer elemento fixo.
+export type AnimacaoCta = "estatico" | "pulsar" | "piscar" | "saltar";
 
 // FPS da animação do botão em si (independente do fps do vídeo final — o
 // filtro overlay do ffmpeg segura o frame mais recente até o próximo PTS
@@ -318,6 +413,11 @@ const PULSAR_PERIODO_S = 1.0;
 const PISCAR_PERIODO_S = 0.8;
 // Opacidade mínima no fundo do "piscar" (nunca chega a sumir de vez).
 const PISCAR_OPACIDADE_MIN = 0.4;
+// "saltar": quanto o elemento sobe no pico do salto (22% da própria altura)
+// e a duração de um ciclo completo (mais rápido que o "pulsar" — fica mais
+// parecido com uma seta "cutucando" pra chamar atenção).
+const SALTAR_PROPORCAO = 0.22;
+const SALTAR_PERIODO_S = 0.7;
 
 interface EntradaDeBotao {
   /** Caminho pra usar como -i do ffmpeg: um PNG único (estático) ou um padrão de sequência (animado). */
@@ -361,28 +461,40 @@ async function prepararEntradaBotao(
   }
 
   const botaoBuffer = renderBotaoPng(textoOverlay, corEscolhida.hex, corEscolhida.texto);
+  return animarPng(botaoBuffer, animacao, duracaoSegundos);
+}
 
+/**
+ * Gera a "entrada" de ffmpeg (um PNG único parado, ou uma sequência de PNGs
+ * cobrindo a duração inteira do vídeo) pra QUALQUER elemento gráfico fixo já
+ * renderizado como PNG com transparência — botão de CTA, selo, seta etc.
+ * Extraído de dentro do que antes só o botão de CTA usava (prepararEntradaBotao,
+ * acima), pra virar reutilizável pelos outros elementos de overlay do "vídeo
+ * stock" (ver montarVideoComVideo).
+ */
+async function animarPng(buffer: Buffer, animacao: AnimacaoCta, duracaoSegundos: number): Promise<EntradaDeBotao> {
   if (animacao === "estatico") {
-    const botaoPath = tmpFile("png");
-    await fs.writeFile(botaoPath, botaoBuffer);
-    return { inputPath: botaoPath, inputOptions: ["-loop 1"], overlayYOffset: 0, dirParaLimpar: null };
+    const caminho = tmpFile("png");
+    await fs.writeFile(caminho, buffer);
+    return { inputPath: caminho, inputOptions: ["-loop 1"], overlayYOffset: 0, dirParaLimpar: null };
   }
 
-  const imagemBase = await loadImage(botaoBuffer);
-  // Só o "pulsar" precisa de um canvas maior que o botão (folga pro
-  // crescimento não cortar nas bordas) — o "piscar" só muda opacidade, então
-  // usa exatamente o tamanho do botão, sem deslocar nada.
-  const folga = animacao === "pulsar" ? 1 + PULSAR_ESCALA_MAX + 0.06 : 1;
+  const imagemBase = await loadImage(buffer);
+  // "pulsar" e "saltar" precisam de um canvas maior que o elemento (folga pro
+  // crescimento/salto não cortar nas bordas) — "piscar" só muda opacidade,
+  // então usa exatamente o tamanho do elemento, sem deslocar nada.
+  const folga =
+    animacao === "pulsar" || animacao === "saltar" ? 1 + Math.max(PULSAR_ESCALA_MAX, SALTAR_PROPORCAO) + 0.06 : 1;
   const larguraCanvas = Math.ceil(imagemBase.width * folga);
   const alturaCanvas = Math.ceil(imagemBase.height * folga);
   // Desenha sempre ancorado na base do canvas (não centralizado) — assim,
-  // combinado com o overlayYOffset abaixo, a borda inferior do botão cai
-  // exatamente na mesma posição do botão estático, com ou sem folga extra.
+  // combinado com o overlayYOffset abaixo, a borda inferior do elemento cai
+  // exatamente na mesma posição do elemento estático, com ou sem folga extra.
   const overlayYOffset = alturaCanvas - imagemBase.height;
 
-  const periodo = animacao === "pulsar" ? PULSAR_PERIODO_S : PISCAR_PERIODO_S;
+  const periodo = animacao === "pulsar" ? PULSAR_PERIODO_S : animacao === "saltar" ? SALTAR_PERIODO_S : PISCAR_PERIODO_S;
   const totalFrames = Math.max(1, Math.ceil(duracaoSegundos * BOTAO_ANIMACAO_FPS) + BOTAO_ANIMACAO_FPS);
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pv-cta-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pv-anim-"));
 
   for (let i = 0; i < totalFrames; i++) {
     const t = i / BOTAO_ANIMACAO_FPS;
@@ -398,6 +510,15 @@ async function prepararEntradaBotao(
       const w = imagemBase.width * escala;
       const h = imagemBase.height * escala;
       ctx.drawImage(imagemBase, (larguraCanvas - w) / 2, alturaCanvas - h, w, h);
+    } else if (animacao === "saltar") {
+      const deslocamento = imagemBase.height * SALTAR_PROPORCAO * fase;
+      ctx.drawImage(
+        imagemBase,
+        (larguraCanvas - imagemBase.width) / 2,
+        alturaCanvas - imagemBase.height - deslocamento,
+        imagemBase.width,
+        imagemBase.height
+      );
     } else {
       ctx.globalAlpha = 1 - (1 - PISCAR_OPACIDADE_MIN) * fase;
       ctx.drawImage(imagemBase, 0, 0, imagemBase.width, imagemBase.height);
@@ -502,7 +623,12 @@ function sortear(min: number, max: number): number {
  * cortando/repetindo o clipe para bater com a duração do áudio.
  */
 export async function montarVideoComVideo(
-  opts: MontarVideoOpts & { videoBuffer: Buffer; ajusteDeQuadro?: AjusteDeQuadro; remixarVisual?: boolean }
+  opts: MontarVideoOpts & {
+    videoBuffer: Buffer;
+    ajusteDeQuadro?: AjusteDeQuadro;
+    remixarVisual?: boolean;
+    elementos?: ElementosGraficos;
+  }
 ): Promise<void> {
   const { largura: W, altura: H } = FORMATOS[opts.formatoVideo ?? "vertical"];
   const margemInferior = Math.round(H * MARGEM_INFERIOR_PROPORCAO);
@@ -521,6 +647,30 @@ export async function montarVideoComVideo(
     opts.animacaoCta ?? "estatico",
     duration
   );
+
+  // Elementos gráficos extras (só relevantes no fluxo de "vídeo stock" — ver
+  // ElementosGraficos acima e gerar/route.ts) — cada um preparado do mesmo
+  // jeito que o botão de CTA (PNG estático ou sequência animada via
+  // animarPng), só que com posição fixa própria (título no topo, selo acima
+  // do CTA, seta do lado direito).
+  const elementos = opts.elementos;
+  const entradaTitulo = elementos?.tituloTopo?.texto
+    ? await animarPng(
+        renderFaixaDeTextoPng(elementos.tituloTopo.texto, elementos.tituloTopo.corTexto, elementos.tituloTopo.corFundo, W),
+        "estatico",
+        duration
+      )
+    : null;
+  const entradaSelo = elementos?.selo?.texto
+    ? await animarPng(
+        renderBotaoPng(elementos.selo.texto, elementos.selo.corFundo, elementos.selo.corTexto, 34),
+        elementos.selo.animacao,
+        duration
+      )
+    : null;
+  const entradaSeta = elementos?.seta
+    ? await animarPng(renderSetaPng(elementos.seta.cor), elementos.seta.animacao, duration)
+    : null;
 
   let filtros: string[];
 
@@ -576,14 +726,30 @@ export async function montarVideoComVideo(
   }
   let lastLabel = "cropped";
 
-  if (entradaBotao) {
-    const deslocamento = entradaBotao.overlayYOffset > 0 ? `-${entradaBotao.overlayYOffset}` : "";
-    filtros.push(`[${lastLabel}][2:v]overlay=(main_w-overlay_w)/2:main_h-${margemInferior}${deslocamento}[out]`);
-    lastLabel = "out";
+  // Camadas sobrepostas na ordem título -> selo -> seta -> botão de CTA,
+  // cada uma como seu próprio input de ffmpeg com índice dinâmico (em vez do
+  // "[2:v]" fixo de antes, que só previa UM elemento opcional possível).
+  const cmd = ffmpeg().input(vidPath).inputOptions(["-stream_loop -1"]).input(audioPath);
+  let proximoIndice = 2;
+
+  function aplicarOverlay(entrada: EntradaDeBotao | null, x: string, y: string) {
+    if (!entrada) return;
+    cmd.input(entrada.inputPath).inputOptions(entrada.inputOptions);
+    const indice = proximoIndice++;
+    const deslocamento = entrada.overlayYOffset > 0 ? `-${entrada.overlayYOffset}` : "";
+    const label = `ov${indice}`;
+    filtros.push(`[${lastLabel}][${indice}:v]overlay=${x}:${y}${deslocamento}[${label}]`);
+    lastLabel = label;
   }
 
-  const cmd = ffmpeg().input(vidPath).inputOptions(["-stream_loop -1"]).input(audioPath);
-  if (entradaBotao) cmd.input(entradaBotao.inputPath).inputOptions(entradaBotao.inputOptions);
+  // Título: faixa de largura inteira, perto do topo.
+  aplicarOverlay(entradaTitulo, "0", `round(main_h*0.05)`);
+  // Selo: centralizado, um pouco acima de onde o CTA fica.
+  aplicarOverlay(entradaSelo, "(main_w-overlay_w)/2", `main_h-${margemInferior}-180`);
+  // Seta: lado direito, mais ou menos na metade da altura.
+  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", "main_h*0.48-overlay_h/2");
+  // Botão de CTA: mesma posição de sempre (base, centralizado).
+  aplicarOverlay(entradaBotao, "(main_w-overlay_w)/2", `main_h-${margemInferior}`);
 
   await new Promise<void>((resolve, reject) => {
     cmd
@@ -603,7 +769,12 @@ export async function montarVideoComVideo(
 
   await fs.unlink(vidPath).catch(() => {});
   await fs.unlink(audioPath).catch(() => {});
-  await limparEntradaBotao(entradaBotao);
+  await Promise.all([
+    limparEntradaBotao(entradaBotao),
+    limparEntradaBotao(entradaTitulo),
+    limparEntradaBotao(entradaSelo),
+    limparEntradaBotao(entradaSeta),
+  ]);
 }
 
 export function novoArquivoDeSaida(): string {

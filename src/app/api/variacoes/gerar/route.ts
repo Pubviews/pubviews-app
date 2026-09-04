@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { gerarNarracao } from "@/lib/elevenlabs";
 import { gerarImagem, sugerirTermosDeBusca } from "@/lib/gemini";
 import { buscarVideoStock, baixarVideo } from "@/lib/pexels";
-import { montarVideoComImagem, montarVideoComVideo, novoArquivoDeSaida, type AnimacaoCta } from "@/lib/video";
+import {
+  montarVideoComImagem,
+  montarVideoComVideo,
+  novoArquivoDeSaida,
+  type AnimacaoCta,
+  type ElementosGraficos,
+} from "@/lib/video";
 import { promises as fs } from "fs";
 import { put } from "@vercel/blob";
 import { salvarNoHistorico } from "@/lib/db";
@@ -16,9 +22,55 @@ export const maxDuration = 280;
 
 const encoder = new TextEncoder();
 
-const ANIMACOES_CTA_VALIDAS = new Set<AnimacaoCta>(["estatico", "pulsar", "piscar"]);
+const ANIMACOES_CTA_VALIDAS = new Set<AnimacaoCta>(["estatico", "pulsar", "piscar", "saltar"]);
 function lerAnimacaoCta(valor: unknown): AnimacaoCta {
   return ANIMACOES_CTA_VALIDAS.has(valor as AnimacaoCta) ? (valor as AnimacaoCta) : "estatico";
+}
+
+/**
+ * Lê os elementos gráficos extras (título/selo/seta — ver ElementosGraficos
+ * em src/lib/video.ts), só usados no formato "video" (banco de imagens): o
+ * usuário digita o texto/cor de cada um no front, tudo opcional e
+ * independente entre si (cada um só entra se tiver o texto preenchido, ou —
+ * no caso da seta — se o toggle tiver sido ligado).
+ */
+function lerElementosGraficos(valor: unknown): ElementosGraficos | undefined {
+  if (!valor || typeof valor !== "object") return undefined;
+  const v = valor as Record<string, unknown>;
+  const elementos: ElementosGraficos = {};
+
+  if (v.tituloTopo && typeof v.tituloTopo === "object") {
+    const t = v.tituloTopo as Record<string, unknown>;
+    const texto = typeof t.texto === "string" ? t.texto.trim() : "";
+    if (texto) {
+      elementos.tituloTopo = {
+        texto,
+        corTexto: typeof t.corTexto === "string" && t.corTexto ? t.corTexto : "#ffffff",
+        corFundo: typeof t.corFundo === "string" && t.corFundo ? t.corFundo : "#111111",
+      };
+    }
+  }
+  if (v.selo && typeof v.selo === "object") {
+    const s = v.selo as Record<string, unknown>;
+    const texto = typeof s.texto === "string" ? s.texto.trim() : "";
+    if (texto) {
+      elementos.selo = {
+        texto,
+        corTexto: typeof s.corTexto === "string" && s.corTexto ? s.corTexto : "#ffffff",
+        corFundo: typeof s.corFundo === "string" && s.corFundo ? s.corFundo : "#e53935",
+        animacao: lerAnimacaoCta(s.animacao),
+      };
+    }
+  }
+  if (v.seta && typeof v.seta === "object") {
+    const s = v.seta as Record<string, unknown>;
+    elementos.seta = {
+      cor: typeof s.cor === "string" && s.cor ? s.cor : "#ffd600",
+      animacao: lerAnimacaoCta(s.animacao),
+    };
+  }
+
+  return Object.keys(elementos).length > 0 ? elementos : undefined;
 }
 
 /**
@@ -45,6 +97,8 @@ export async function POST(req: NextRequest) {
         const descricaoVisual: string = body.descricaoVisual || texto;
         const textoOverlay: string | undefined = body.textoOverlay || undefined;
         const animacaoCta = lerAnimacaoCta(body.animacaoCta);
+        // Só usados no formato "video" (banco de imagens) — ver lerElementosGraficos.
+        const elementosGraficos = lerElementosGraficos(body.elementos);
         const voiceId: string | undefined = body.voiceId || undefined;
         // URL do Vercel Blob (não os bytes direto) — o upload já aconteceu do
         // navegador pro Blob, então aqui só busca o arquivo, sem esbarrar no
@@ -128,7 +182,14 @@ export async function POST(req: NextRequest) {
           }
           const videoBuffer = await baixarVideo(stock.url);
           emitir({ tipo: "progresso", etapa: "render", mensagem: "Montando o vídeo...", pct: 55 });
-          await montarVideoComVideo({ audioBuffer, videoBuffer, textoOverlay, animacaoCta, saidaPath });
+          await montarVideoComVideo({
+            audioBuffer,
+            videoBuffer,
+            textoOverlay,
+            animacaoCta,
+            saidaPath,
+            elementos: elementosGraficos,
+          });
         }
 
         emitir({ tipo: "progresso", etapa: "finalizando", mensagem: "Finalizando...", pct: 95 });
