@@ -809,9 +809,14 @@ export async function montarVideoComVideo(
   // de já estar na linha do CTA. Usa uma margem fixa (pequena) a partir da
   // borda inferior REAL do quadro (não mais a linha do CTA), descontando
   // "overlay_h" pra nunca cortar a seta mesmo quando ela anima (o tamanho do
-  // PNG varia um pouco entre "estático" e as animações) — como fica do lado
-  // direito (não centralizada), não esbarra no botão de CTA quando ele existe.
-  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", `main_h-${SETA_MARGEM_INFERIOR_PX}-overlay_h`);
+  // PNG varia um pouco entre "estático" e as animações).
+  // Posição horizontal depende do formato (pedido do usuário depois de ver
+  // os dois lado a lado): no vertical, mais alto e estreito, ela fica
+  // centralizada junto com o CTA (empilhada, sem esbarrar — Y diferente); no
+  // quadrado, mais baixo e largo, ela fica perto da borda direita.
+  const ehQuadrado = (opts.formatoVideo ?? "vertical") === "quadrado";
+  const setaX = ehQuadrado ? "main_w*0.92-overlay_w/2" : "(main_w-overlay_w)/2";
+  aplicarOverlay(entradaSeta, setaX, `main_h-${SETA_MARGEM_INFERIOR_PX}-overlay_h`);
 
   // Botão de CTA: mesma posição de sempre (base, centralizado).
   aplicarOverlay(entradaBotao, "(main_w-overlay_w)/2", `main_h-${margemInferior}`);
