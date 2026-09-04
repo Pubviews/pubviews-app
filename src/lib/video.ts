@@ -62,18 +62,12 @@ const FORMATOS: Record<FormatoVideo, { largura: number; altura: number }> = {
 // Proporção original da margem inferior do botão (420px numa altura de 1920px).
 const MARGEM_INFERIOR_PROPORCAO = 420 / 1920;
 
-// Posição vertical do selo e da seta no formato "vídeo stock" (ver
-// montarVideoComVideo) — usuário relatou (2x) que os dois ficavam "quase no
-// centro" do criativo, longe demais da base. Valores usados QUANDO TEM
-// botão de CTA na mesma geração — precisam de espaço suficiente acima do
-// CTA pra nunca sobrepor (testado com os dois juntos, animados).
-const SELO_OFFSET_ACIMA_CTA_PX = 130;
-const SETA_Y_PROPORCAO = 0.63;
-// Valores usados QUANDO NÃO TEM CTA — nesse caso não existe nada na base
-// pra evitar, então dá pra descer bem mais (quase até a margem que o CTA
-// usaria, se existisse).
-const SELO_OFFSET_ACIMA_CTA_PX_SEM_CTA = 40;
-const SETA_Y_PROPORCAO_SEM_CTA = 0.74;
+// Posição vertical do título, no topo (ver montarVideoComVideo).
+const TITULO_Y_PROPORCAO = 0.05;
+// Espaço entre o título e o selo, quando os dois aparecem juntos (o selo
+// fica logo abaixo do título — pedido do usuário depois de 2 rodadas de
+// ajuste de posição: título no topo, selo colado nele, seta bem lá embaixo).
+const GAP_SELO_ABAIXO_TITULO_PROPORCAO = 0.018;
 
 function tmpFile(ext: string): string {
   return path.join(os.tmpdir(), `pv-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
@@ -795,17 +789,20 @@ export async function montarVideoComVideo(
   }
 
   // Título: faixa de largura inteira, perto do topo.
-  aplicarOverlay(entradaTitulo, "0", `round(main_h*0.05)`);
-  // Selo e seta: quanto mais perto da base, melhor (usuário pediu 2x pra
-  // descer mais — "quase no centro do criativo") — mas o selo não pode
-  // encostar no botão de CTA quando os dois aparecem juntos. Sem CTA nessa
-  // geração, não tem nada pra evitar lá embaixo, então os dois descem bem
-  // mais (quase até a margem que o CTA usaria) do que quando o CTA existe.
-  const temCta = !!entradaBotao;
-  const seloOffsetAcimaCta = temCta ? SELO_OFFSET_ACIMA_CTA_PX : SELO_OFFSET_ACIMA_CTA_PX_SEM_CTA;
-  const setaYProporcao = temCta ? SETA_Y_PROPORCAO : SETA_Y_PROPORCAO_SEM_CTA;
-  aplicarOverlay(entradaSelo, "(main_w-overlay_w)/2", `main_h-${margemInferior}-${seloOffsetAcimaCta}`);
-  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", `main_h*${setaYProporcao}-overlay_h/2`);
+  const tituloY = Math.round(H * TITULO_Y_PROPORCAO);
+  aplicarOverlay(entradaTitulo, "0", `${tituloY}`);
+
+  // Selo: logo abaixo do título (ou, se não tiver título, na posição que ele
+  // ocuparia) — pedido do usuário depois de 2 rodadas de ajuste: ele queria
+  // o selo perto do texto no topo, não mais perto da base/CTA.
+  const tituloAltura = Math.round(W * 0.12); // mesmo cálculo de renderFaixaDeTextoPng
+  const seloY = entradaTitulo ? tituloY + tituloAltura + Math.round(H * GAP_SELO_ABAIXO_TITULO_PROPORCAO) : tituloY;
+  aplicarOverlay(entradaSelo, "(main_w-overlay_w)/2", `${seloY}`);
+
+  // Seta: bem lá embaixo, na mesma linha de base do CTA — como fica do lado
+  // direito (não centralizada), não esbarra no botão de CTA quando ele existe.
+  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", `main_h-${margemInferior}`);
+
   // Botão de CTA: mesma posição de sempre (base, centralizado).
   aplicarOverlay(entradaBotao, "(main_w-overlay_w)/2", `main_h-${margemInferior}`);
 
