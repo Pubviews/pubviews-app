@@ -19,6 +19,35 @@ function garantirFonteRegistrada() {
   }
 }
 
+// Opções de fonte pra "reescrever" um texto embutido no vídeo original (ver
+// sobreporTextoNovo mais abaixo) — poucas opções, mas com "caras" bem
+// diferentes entre si (não só pesos diferentes da mesma fonte), pra troca de
+// fonte realmente mudar a aparência do criativo. Todas de licença OFL (uso
+// comercial livre).
+interface OpcaoDeFonte {
+  arquivo: string;
+  family: string;
+  label: string;
+}
+
+const FONTES_TEXTO: Record<string, OpcaoDeFonte> = {
+  padrao: { arquivo: "DejaVuSans-Bold.ttf", family: FONT_FAMILY, label: "Padrão (sem serifa)" },
+  impacto: { arquivo: "Anton.ttf", family: "PV Anton", label: "Impacto (condensada, tipo cartaz)" },
+  condensada: { arquivo: "BebasNeue.ttf", family: "PV Bebas", label: "Condensada (caixa alta)" },
+  elegante: { arquivo: "PlayfairDisplay-Bold.ttf", family: "PV Playfair", label: "Elegante (serifada)" },
+  moderna: { arquivo: "Poppins-Bold.ttf", family: "PV Poppins", label: "Moderna (arredondada)" },
+};
+
+let fontesTextoRegistradas = false;
+function garantirFontesTextoRegistradas() {
+  if (fontesTextoRegistradas) return;
+  for (const opcao of Object.values(FONTES_TEXTO)) {
+    if (opcao.family === FONT_FAMILY) continue; // já registrada por garantirFonteRegistrada()
+    GlobalFonts.registerFromPath(path.join(process.cwd(), "public", "fonts", opcao.arquivo), opcao.family);
+  }
+  fontesTextoRegistradas = true;
+}
+
 // Formatos de saída suportados: vertical (padrão, Stories/Reels) e quadrado
 // (feed). Ambos usam a mesma largura — só a altura muda — então o botão de
 // CTA (dimensionado em pixels absolutos) fica com o mesmo tamanho visual
@@ -581,23 +610,20 @@ export function novoArquivoDeSaida(): string {
   return tmpFile("mp4");
 }
 
+export interface DimensoesVideo {
+  largura: number;
+  altura: number;
+}
+
 /**
- * Gera uma imagem de máscara (preto = manter, branco = apagar) do MESMO
- * tamanho real do vídeo enviado, a partir de uma região normalizada (0 a 1,
- * relativa à largura/altura) marcada pelo usuário no navegador — usada pela
- * IA de remoção de elemento (WaveSpeedAI, ver src/lib/wavespeed.ts). Lê as
- * dimensões reais do vídeo com ffprobe em vez de confiar só no que o
- * navegador reportou, pra máscara e vídeo baterem certinho.
+ * Lê as dimensões reais (em pixels) de um vídeo com ffprobe — em vez de
+ * confiar só no que o navegador reportou, pra máscara/overlay e vídeo
+ * baterem certinho. Usada tanto pra gerar a máscara de remoção quanto pra
+ * posicionar o texto novo (ver funções abaixo).
  */
-export async function gerarMascaraPng(
-  videoBuffer: Buffer,
-  regiao: { x: number; y: number; w: number; h: number }
-): Promise<Buffer> {
+export async function obterDimensoesDoVideo(videoBuffer: Buffer): Promise<DimensoesVideo> {
   const vidPath = tmpFile("mp4");
   await fs.writeFile(vidPath, videoBuffer);
-
-  let largura = 1080;
-  let altura = 1920;
   try {
     const dimensoes = await new Promise<{ width?: number; height?: number }>((resolve, reject) => {
       ffmpeg.ffprobe(vidPath, (err, data) => {
@@ -606,12 +632,23 @@ export async function gerarMascaraPng(
         resolve({ width: streamDeVideo?.width, height: streamDeVideo?.height });
       });
     });
-    if (dimensoes.width) largura = dimensoes.width;
-    if (dimensoes.height) altura = dimensoes.height;
+    return { largura: dimensoes.width || 1080, altura: dimensoes.height || 1920 };
   } finally {
     await fs.unlink(vidPath).catch(() => {});
   }
+}
 
+/**
+ * Gera uma imagem de máscara (preto = manter, branco = apagar), do tamanho
+ * real do vídeo, a partir de uma região normalizada (0 a 1, relativa à
+ * largura/altura) marcada pelo usuário no navegador — usada pela IA de
+ * remoção de elemento (WaveSpeedAI, ver src/lib/wavespeed.ts).
+ */
+export function gerarMascaraPng(
+  dimensoes: DimensoesVideo,
+  regiao: { x: number; y: number; w: number; h: number }
+): Buffer {
+  const { largura, altura } = dimensoes;
   const canvas = createCanvas(largura, altura);
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#000000";
@@ -624,4 +661,89 @@ export async function gerarMascaraPng(
     Math.round(regiao.h * altura)
   );
   return canvas.toBuffer("image/png");
+}
+
+function medirLarguraTexto(texto: string, fontSize: number, family: string): number {
+  const medindo = createCanvas(10, 10).getContext("2d");
+  medindo.font = `bold ${fontSize}px "${family}"`;
+  return medindo.measureText(texto).width;
+}
+
+/**
+ * Renderiza um texto (uma linha só, cor e fonte escolhidas pelo usuário) num
+ * PNG transparente do tamanho exato de uma caixa em pixels — encolhendo o
+ * tamanho da fonte automaticamente até caber na largura da caixa. Usada pra
+ * "reescrever" um texto que foi apagado do vídeo original (ver
+ * sobreporImagemFixa abaixo): em vez de pedir pra uma IA generativa redesenhar
+ * o texto (nada confiável pra texto — erra letra, kerning etc.), a gente
+ * mesmo desenha o texto novo, com controle total de fonte/cor/posição.
+ */
+export function renderTextoEmCaixaPng(
+  texto: string,
+  corTexto: string,
+  larguraCaixa: number,
+  alturaCaixa: number,
+  fonteId: string
+): Buffer {
+  garantirFonteRegistrada();
+  garantirFontesTextoRegistradas();
+  const fonte = FONTES_TEXTO[fonteId] || FONTES_TEXTO.padrao;
+
+  const larguraMax = Math.max(10, Math.round(larguraCaixa * 0.94));
+  const alturaMax = Math.max(10, Math.round(alturaCaixa * 0.8));
+
+  let fontSize = alturaMax;
+  while (fontSize > 8 && medirLarguraTexto(texto, fontSize, fonte.family) > larguraMax) {
+    fontSize -= 1;
+  }
+
+  const canvas = createCanvas(Math.max(1, Math.round(larguraCaixa)), Math.max(1, Math.round(alturaCaixa)));
+  const ctx = canvas.getContext("2d");
+  ctx.font = `bold ${fontSize}px "${fonte.family}"`;
+  ctx.fillStyle = corTexto;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(texto, larguraCaixa / 2, alturaCaixa / 2, larguraMax);
+  return canvas.toBuffer("image/png");
+}
+
+/**
+ * Sobrepõe uma imagem PNG (com transparência) num ponto fixo (x,y em pixels,
+ * canto superior-esquerdo) de um vídeo, do início ao fim, sem mexer em mais
+ * nada — usada pra desenhar o texto novo (renderTextoEmCaixaPng) por cima do
+ * vídeo já com o elemento antigo apagado pela IA.
+ */
+export async function sobreporImagemFixa(
+  videoBuffer: Buffer,
+  imagemBuffer: Buffer,
+  posicao: { x: number; y: number }
+): Promise<Buffer> {
+  const vidPath = tmpFile("mp4");
+  const imgPath = tmpFile("png");
+  const outPath = tmpFile("mp4");
+  await fs.writeFile(vidPath, videoBuffer);
+  await fs.writeFile(imgPath, imagemBuffer);
+
+  await new Promise<void>((resolve, reject) => {
+    ffmpeg()
+      .input(vidPath)
+      .input(imgPath)
+      .inputOptions(["-loop 1"])
+      .complexFilter([`[0:v][1:v]overlay=${Math.round(posicao.x)}:${Math.round(posicao.y)}:shortest=1[out]`], "out")
+      .outputOptions(["-map 0:a?", "-c:v libx264", "-pix_fmt yuv420p", "-c:a copy", "-shortest"])
+      .save(outPath)
+      .on("end", () => resolve())
+      .on("error", (err) => reject(err));
+  });
+
+  const resultado = await fs.readFile(outPath);
+  await fs.unlink(vidPath).catch(() => {});
+  await fs.unlink(imgPath).catch(() => {});
+  await fs.unlink(outPath).catch(() => {});
+  return resultado;
+}
+
+/** As opções de fonte disponíveis pra "reescrever texto" — pra popular o seletor no front. */
+export function listarOpcoesDeFonte(): { id: string; label: string }[] {
+  return Object.entries(FONTES_TEXTO).map(([id, opcao]) => ({ id, label: opcao.label }));
 }

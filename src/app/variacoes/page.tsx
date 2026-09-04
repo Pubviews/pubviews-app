@@ -273,11 +273,20 @@ export default function VariacoesPage() {
   const [videoOriginalUrlEditado, setVideoOriginalUrlEditado] = useState<string | null>(null);
   const [aplicandoRemocao, setAplicandoRemocao] = useState(false);
   const [erroRemocao, setErroRemocao] = useState<string | null>(null);
+  // Opcional: em vez de só apagar, redesenha um texto novo (fonte/cor
+  // escolhidas aqui) na mesma área — a gente mesmo desenha (sem depender de
+  // IA generativa pra "reescrever" texto, que erra letra/kerning).
+  const [textoNovo, setTextoNovo] = useState("");
+  const [corTextoNovo, setCorTextoNovo] = useState("#ffffff");
+  const [fonteTextoNovo, setFonteTextoNovo] = useState("padrao");
 
   function limparRemocaoDeElemento() {
     setRegiaoParaApagar(null);
     setVideoOriginalUrlEditado(null);
     setErroRemocao(null);
+    setTextoNovo("");
+    setCorTextoNovo("#ffffff");
+    setFonteTextoNovo("padrao");
   }
 
   async function aplicarRemocaoDeElemento() {
@@ -288,7 +297,13 @@ export default function VariacoesPage() {
       const res = await fetch("/api/variacoes/apagar-elemento", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoUrl: videoOriginalUrl, regiao: regiaoParaApagar }),
+        body: JSON.stringify({
+          videoUrl: videoOriginalUrl,
+          regiao: regiaoParaApagar,
+          textoNovo: textoNovo.trim() || undefined,
+          corTexto: corTextoNovo,
+          fonte: fonteTextoNovo,
+        }),
         // Bem folgado: a IA de remoção demora, em média, ~161s pra processar.
         signal: AbortSignal.timeout(270000),
       });
@@ -636,14 +651,15 @@ export default function VariacoesPage() {
         {videoOriginalUrl && !analisandoVideo && (
           <div className="rounded-md border border-dashed border-zinc-300 p-3">
             <label className="block text-sm font-medium text-zinc-700">
-              Remover um elemento do vídeo original com IA (opcional)
+              Apagar (ou reescrever) um elemento do vídeo original com IA (opcional)
             </label>
             <p className="mt-1 text-xs text-zinc-500">
               O retoque visual (cor/corte/vinheta) já é aplicado automaticamente em toda variação
-              que usa esse vídeo. Se quiser ir além e apagar de verdade algo específico (ex: o
-              botão/texto de CTA já embutido no vídeo), marque a área abaixo e aplique — é pago
-              (~$0,02 por segundo de vídeo) e demora cerca de 3 minutos, mas só precisa ser feito
-              UMA vez: o resultado vale pra todas as variações que reaproveitarem esse vídeo.
+              que usa esse vídeo. Se quiser ir além, marque a área com o elemento (ex: o
+              botão/texto de CTA já embutido no vídeo) abaixo — dá pra só apagar, ou apagar e
+              escrever um texto novo no lugar (com fonte e cor à sua escolha). É pago (~$0,02 por
+              segundo de vídeo) e demora cerca de 3 minutos, mas só precisa ser feito UMA vez: o
+              resultado vale pra todas as variações que reaproveitarem esse vídeo.
             </p>
 
             <SeletorDeMascara
@@ -657,6 +673,47 @@ export default function VariacoesPage() {
               }}
             />
 
+            {regiaoParaApagar && regiaoParaApagar.w > 0 && regiaoParaApagar.h > 0 && (
+              <div className="mt-3">
+                <label className="block text-xs font-medium text-zinc-500">
+                  Escrever um texto novo no lugar (opcional — deixe em branco pra só apagar)
+                </label>
+                <input
+                  value={textoNovo}
+                  onChange={(e) => setTextoNovo(e.target.value)}
+                  placeholder="ex: Comece agora"
+                  className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                />
+                {textoNovo && (
+                  <div className="mt-2 flex flex-wrap items-end gap-3">
+                    <div>
+                      <label className="block text-xs text-zinc-500">Cor</label>
+                      <input
+                        type="color"
+                        value={corTextoNovo}
+                        onChange={(e) => setCorTextoNovo(e.target.value)}
+                        className="mt-1 h-9 w-14 rounded-md border border-zinc-300"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <label className="block text-xs text-zinc-500">Fonte</label>
+                      <select
+                        value={fonteTextoNovo}
+                        onChange={(e) => setFonteTextoNovo(e.target.value)}
+                        className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm"
+                      >
+                        <option value="padrao">Padrão (sem serifa)</option>
+                        <option value="impacto">Impacto (condensada, tipo cartaz)</option>
+                        <option value="condensada">Condensada (caixa alta)</option>
+                        <option value="elegante">Elegante (serifada)</option>
+                        <option value="moderna">Moderna (arredondada)</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <button
                 onClick={aplicarRemocaoDeElemento}
@@ -666,7 +723,11 @@ export default function VariacoesPage() {
                 }
                 className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
               >
-                {aplicandoRemocao ? "Removendo com IA... (pode levar uns 3 min)" : "Aplicar remoção com IA"}
+                {aplicandoRemocao
+                  ? "Aplicando IA... (pode levar uns 3 min)"
+                  : textoNovo
+                    ? "Aplicar remoção + texto novo"
+                    : "Aplicar remoção com IA"}
               </button>
               {(regiaoParaApagar || videoOriginalUrlEditado) && (
                 <button
