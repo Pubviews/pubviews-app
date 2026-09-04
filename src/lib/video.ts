@@ -68,6 +68,12 @@ const TITULO_Y_PROPORCAO = 0.05;
 // fica logo abaixo do título — pedido do usuário depois de 2 rodadas de
 // ajuste de posição: título no topo, selo colado nele, seta bem lá embaixo).
 const GAP_SELO_ABAIXO_TITULO_PROPORCAO = 0.018;
+// Margem fixa (em pixels) entre a base da seta e a borda inferior real do
+// vídeo — pequena de propósito (usuário pediu pra ela ficar "bem lá
+// embaixo"). Fixa em pixels (não proporcional a main_h) porque a seta é
+// desenhada num tamanho fixo em pixels (renderSetaPng), então uma margem
+// fixa garante o mesmo respiro visual nos dois formatos (vertical/quadrado).
+const SETA_MARGEM_INFERIOR_PX = 50;
 
 function tmpFile(ext: string): string {
   return path.join(os.tmpdir(), `pv-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
@@ -799,9 +805,13 @@ export async function montarVideoComVideo(
   const seloY = entradaTitulo ? tituloY + tituloAltura + Math.round(H * GAP_SELO_ABAIXO_TITULO_PROPORCAO) : tituloY;
   aplicarOverlay(entradaSelo, "(main_w-overlay_w)/2", `${seloY}`);
 
-  // Seta: bem lá embaixo, na mesma linha de base do CTA — como fica do lado
+  // Seta: bem lá embaixo mesmo — usuário pediu pra descer ainda mais depois
+  // de já estar na linha do CTA. Usa uma margem fixa (pequena) a partir da
+  // borda inferior REAL do quadro (não mais a linha do CTA), descontando
+  // "overlay_h" pra nunca cortar a seta mesmo quando ela anima (o tamanho do
+  // PNG varia um pouco entre "estático" e as animações) — como fica do lado
   // direito (não centralizada), não esbarra no botão de CTA quando ele existe.
-  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", `main_h-${margemInferior}`);
+  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", `main_h-${SETA_MARGEM_INFERIOR_PX}-overlay_h`);
 
   // Botão de CTA: mesma posição de sempre (base, centralizado).
   aplicarOverlay(entradaBotao, "(main_w-overlay_w)/2", `main_h-${margemInferior}`);
