@@ -466,11 +466,22 @@ async function prepararEntradaBotao(
 
 /**
  * Gera a "entrada" de ffmpeg (um PNG único parado, ou uma sequência de PNGs
- * cobrindo a duração inteira do vídeo) pra QUALQUER elemento gráfico fixo já
- * renderizado como PNG com transparência — botão de CTA, selo, seta etc.
- * Extraído de dentro do que antes só o botão de CTA usava (prepararEntradaBotao,
- * acima), pra virar reutilizável pelos outros elementos de overlay do "vídeo
- * stock" (ver montarVideoComVideo).
+ * de UM ciclo completo da animação, repetida em loop pelo próprio ffmpeg) pra
+ * QUALQUER elemento gráfico fixo já renderizado como PNG com transparência —
+ * botão de CTA, selo, seta etc. Extraído de dentro do que antes só o botão de
+ * CTA usava (prepararEntradaBotao, acima), pra virar reutilizável pelos
+ * outros elementos de overlay do "vídeo stock" (ver montarVideoComVideo).
+ *
+ * IMPORTANTE (bug corrigido): antes, gerava um frame pra cada 1/FPS segundo
+ * da duração INTEIRA do vídeo (ex: um vídeo de 60s virava ~1200 PNGs só pra
+ * esse elemento). Como cada animação é um ciclo que se repete (pulsar/
+ * piscar/saltar sempre voltam ao ponto de partida), isso é redundante: só
+ * precisa renderizar UM ciclo (poucos frames) e deixar o próprio ffmpeg
+ * repeti-lo com "-stream_loop -1", do mesmo jeito que já faz com o vídeo de
+ * fundo. Com vários elementos animados ao mesmo tempo (selo + seta, por
+ * exemplo) o custo antigo multiplicava e podia estourar o tempo limite da
+ * função na Vercel — foi isso que causou o "terminou sem devolver resultado"
+ * relatado pelo usuário ao usar título+selo+seta juntos num vídeo mais longo.
  */
 async function animarPng(buffer: Buffer, animacao: AnimacaoCta, duracaoSegundos: number): Promise<EntradaDeBotao> {
   if (animacao === "estatico") {
@@ -493,7 +504,13 @@ async function animarPng(buffer: Buffer, animacao: AnimacaoCta, duracaoSegundos:
   const overlayYOffset = alturaCanvas - imagemBase.height;
 
   const periodo = animacao === "pulsar" ? PULSAR_PERIODO_S : animacao === "saltar" ? SALTAR_PERIODO_S : PISCAR_PERIODO_S;
-  const totalFrames = Math.max(1, Math.ceil(duracaoSegundos * BOTAO_ANIMACAO_FPS) + BOTAO_ANIMACAO_FPS);
+  // Frames de UM ciclo só (os períodos acima foram escolhidos pra caber num
+  // número inteiro de frames no FPS usado, então o loop fecha sem "salto"
+  // perceptível no ponto de emenda). Nunca gera mais frames do que a duração
+  // real pediria, pra vídeos bem curtos não desperdiçar trabalho à toa.
+  const framesPorCiclo = Math.max(1, Math.round(periodo * BOTAO_ANIMACAO_FPS));
+  const framesParaDuracaoInteira = Math.max(1, Math.ceil(duracaoSegundos * BOTAO_ANIMACAO_FPS) + BOTAO_ANIMACAO_FPS);
+  const totalFrames = Math.min(framesPorCiclo, framesParaDuracaoInteira);
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pv-anim-"));
 
   for (let i = 0; i < totalFrames; i++) {
@@ -531,7 +548,9 @@ async function animarPng(buffer: Buffer, animacao: AnimacaoCta, duracaoSegundos:
 
   return {
     inputPath: path.join(dir, "f%05d.png"),
-    inputOptions: [`-framerate ${BOTAO_ANIMACAO_FPS}`],
+    // "-stream_loop -1" repete essa sequência curta (um ciclo) indefinidamente
+    // — o ffmpeg corta no tamanho certo depois, via "-t <duração>" no output.
+    inputOptions: [`-framerate ${BOTAO_ANIMACAO_FPS}`, "-stream_loop -1"],
     overlayYOffset,
     dirParaLimpar: dir,
   };
