@@ -47,6 +47,7 @@ function lerElementosGraficos(valor: unknown): ElementosGraficos | undefined {
         texto,
         corTexto: typeof t.corTexto === "string" && t.corTexto ? t.corTexto : "#ffffff",
         corFundo: typeof t.corFundo === "string" && t.corFundo ? t.corFundo : "#111111",
+        semFundo: t.semFundo === true,
       };
     }
   }

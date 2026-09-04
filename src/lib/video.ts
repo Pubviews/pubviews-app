@@ -62,6 +62,13 @@ const FORMATOS: Record<FormatoVideo, { largura: number; altura: number }> = {
 // Proporção original da margem inferior do botão (420px numa altura de 1920px).
 const MARGEM_INFERIOR_PROPORCAO = 420 / 1920;
 
+// Posição vertical do selo e da seta no formato "vídeo stock" (ver
+// montarVideoComVideo) — usuário relatou que os dois ficavam "quase no
+// centro" do criativo com os valores antigos (seta a 48% da altura, selo
+// 180px acima do CTA), longe demais da base onde o CTA de verdade fica.
+const SELO_OFFSET_ACIMA_CTA_PX = 130;
+const SETA_Y_PROPORCAO = 0.63;
+
 function tmpFile(ext: string): string {
   return path.join(os.tmpdir(), `pv-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`);
 }
@@ -324,8 +331,14 @@ function renderSetaPng(cor: string, altura = 120): Buffer {
  * no topo do vídeo (ex: "APP TO WATCH NFL LIVE") num "vídeo stock". Sempre
  * estática (sem animação): título costuma ficar melhor parado, é o
  * selo/seta abaixo dele que chamam o movimento.
+ *
+ * `semFundo`: variação sem a faixa colorida atrás — só o texto "flutuando"
+ * direto por cima do vídeo (pedido do usuário, pra poder testar as duas
+ * versões). Sem uma cor sólida atrás pra garantir contraste, o texto ganha
+ * um contorno escuro (stroke) grosso o bastante pra continuar legível em
+ * cima de qualquer cena do vídeo, clara ou escura.
  */
-function renderFaixaDeTextoPng(texto: string, corTexto: string, corFundo: string, largura: number): Buffer {
+function renderFaixaDeTextoPng(texto: string, corTexto: string, corFundo: string, largura: number, semFundo = false): Buffer {
   garantirFonteRegistrada();
 
   const altura = Math.round(largura * 0.12);
@@ -343,13 +356,21 @@ function renderFaixaDeTextoPng(texto: string, corTexto: string, corFundo: string
   const canvas = createCanvas(largura, altura);
   const ctx = canvas.getContext("2d");
 
-  ctx.fillStyle = corFundo;
-  ctx.fillRect(0, 0, largura, altura);
+  if (!semFundo) {
+    ctx.fillStyle = corFundo;
+    ctx.fillRect(0, 0, largura, altura);
+  }
 
-  ctx.fillStyle = corTexto;
   ctx.font = `bold ${fontSize}px "${FONT_FAMILY}"`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  if (semFundo) {
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = Math.max(3, Math.round(fontSize * 0.16));
+    ctx.strokeText(texto, largura / 2, altura / 2 + 2, larguraMax);
+  }
+  ctx.fillStyle = corTexto;
   ctx.fillText(texto, largura / 2, altura / 2 + 2, larguraMax);
 
   return canvas.toBuffer("image/png");
@@ -375,7 +396,7 @@ interface MontarVideoOpts {
  */
 export interface ElementosGraficos {
   /** Faixa de texto no topo (ex: título do anúncio) — sempre estática. */
-  tituloTopo?: { texto: string; corTexto: string; corFundo: string };
+  tituloTopo?: { texto: string; corTexto: string; corFundo: string; semFundo?: boolean };
   /** Selo tipo "LIVE" (mesmo visual do botão de CTA, só que menor). */
   selo?: { texto: string; corTexto: string; corFundo: string; animacao: AnimacaoCta };
   /** Seta apontando pra baixo, do lado direito. */
@@ -675,7 +696,13 @@ export async function montarVideoComVideo(
   const elementos = opts.elementos;
   const entradaTitulo = elementos?.tituloTopo?.texto
     ? await animarPng(
-        renderFaixaDeTextoPng(elementos.tituloTopo.texto, elementos.tituloTopo.corTexto, elementos.tituloTopo.corFundo, W),
+        renderFaixaDeTextoPng(
+          elementos.tituloTopo.texto,
+          elementos.tituloTopo.corTexto,
+          elementos.tituloTopo.corFundo,
+          W,
+          elementos.tituloTopo.semFundo
+        ),
         "estatico",
         duration
       )
@@ -763,10 +790,13 @@ export async function montarVideoComVideo(
 
   // Título: faixa de largura inteira, perto do topo.
   aplicarOverlay(entradaTitulo, "0", `round(main_h*0.05)`);
-  // Selo: centralizado, um pouco acima de onde o CTA fica.
-  aplicarOverlay(entradaSelo, "(main_w-overlay_w)/2", `main_h-${margemInferior}-180`);
-  // Seta: lado direito, mais ou menos na metade da altura.
-  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", "main_h*0.48-overlay_h/2");
+  // Selo: centralizado, um pouco acima de onde o CTA fica — offset menor que
+  // antes (SELO_OFFSET_ACIMA_CTA_PX, era 180) porque o usuário achou que
+  // selo/seta estavam "quase no centro" do criativo, longe demais da base.
+  aplicarOverlay(entradaSelo, "(main_w-overlay_w)/2", `main_h-${margemInferior}-${SELO_OFFSET_ACIMA_CTA_PX}`);
+  // Seta: lado direito, mais pra baixo que o centro (SETA_Y_PROPORCAO, era
+  // 0.48 — ficava bem no meio do criativo) — mesmo motivo acima.
+  aplicarOverlay(entradaSeta, "main_w*0.8-overlay_w/2", `main_h*${SETA_Y_PROPORCAO}-overlay_h/2`);
   // Botão de CTA: mesma posição de sempre (base, centralizado).
   aplicarOverlay(entradaBotao, "(main_w-overlay_w)/2", `main_h-${margemInferior}`);
 

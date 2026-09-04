@@ -178,6 +178,8 @@ interface CardVariacao {
   tituloTopo: string;
   corTituloTopo: string;
   corFundoTitulo: string;
+  // Variação sem a faixa colorida atrás do título — só o texto por cima do vídeo.
+  tituloSemFundo: boolean;
   seloTexto: string;
   corSelo: string;
   corTextoSelo: string;
@@ -617,6 +619,7 @@ export default function VariacoesPage() {
         tituloTopo: "",
         corTituloTopo: "#ffffff",
         corFundoTitulo: "#111111",
+        tituloSemFundo: false,
         seloTexto: "",
         corSelo: "#e53935",
         corTextoSelo: "#ffffff",
@@ -666,7 +669,12 @@ export default function VariacoesPage() {
         card.formato === "video"
           ? {
               tituloTopo: card.tituloTopo.trim()
-                ? { texto: card.tituloTopo.trim(), corTexto: card.corTituloTopo, corFundo: card.corFundoTitulo }
+                ? {
+                    texto: card.tituloTopo.trim(),
+                    corTexto: card.corTituloTopo,
+                    corFundo: card.corFundoTitulo,
+                    semFundo: card.tituloSemFundo,
+                  }
                 : undefined,
               selo: card.seloTexto.trim()
                 ? {
@@ -1281,18 +1289,30 @@ export default function VariacoesPage() {
                               className="h-9 w-10 rounded-md border border-zinc-300"
                             />
                           </div>
-                          <div>
-                            <label className="block text-[10px] text-zinc-400">Fundo</label>
-                            <input
-                              type="color"
-                              value={card.corFundoTitulo}
-                              onChange={(e) => atualizarCard(idx, { corFundoTitulo: e.target.value })}
-                              className="h-9 w-10 rounded-md border border-zinc-300"
-                            />
-                          </div>
+                          {!card.tituloSemFundo && (
+                            <div>
+                              <label className="block text-[10px] text-zinc-400">Fundo</label>
+                              <input
+                                type="color"
+                                value={card.corFundoTitulo}
+                                onChange={(e) => atualizarCard(idx, { corFundoTitulo: e.target.value })}
+                                className="h-9 w-10 rounded-md border border-zinc-300"
+                              />
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
+                    {card.tituloTopo && (
+                      <label className="mt-1 flex items-center gap-1.5 text-xs text-zinc-500">
+                        <input
+                          type="checkbox"
+                          checked={card.tituloSemFundo}
+                          onChange={(e) => atualizarCard(idx, { tituloSemFundo: e.target.checked })}
+                        />
+                        Sem fundo (só o texto, direto por cima do vídeo)
+                      </label>
+                    )}
                   </div>
 
                   <div className="mt-3">
