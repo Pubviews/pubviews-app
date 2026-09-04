@@ -97,16 +97,18 @@ function razaoContraste(a: CorRgb, b: CorRgb): number {
 }
 
 /**
- * Calcula a cor média de uma imagem/frame na região onde o botão de CTA vai
- * ficar sobreposto (centro, próximo à base), reduzindo-a a uma amostra
- * pequena para o cálculo ser rápido.
+ * Calcula a cor média de uma imagem/frame numa região (por padrão, a imagem
+ * inteira), reduzindo-a a uma amostra pequena para o cálculo ser rápido.
  */
-async function corMediaRegiaoDoBotao(bufferImagem: Buffer): Promise<CorRgb> {
+async function corMediaAmostra(
+  bufferImagem: Buffer,
+  regiao: { x: number; y: number; w: number; h: number } = { x: 0, y: 0, w: 1, h: 1 }
+): Promise<CorRgb> {
   const img = await loadImage(bufferImagem);
-  const sx = img.width * 0.2;
-  const sy = img.height * 0.68;
-  const sw = img.width * 0.6;
-  const sh = img.height * 0.28;
+  const sx = img.width * regiao.x;
+  const sy = img.height * regiao.y;
+  const sw = img.width * regiao.w;
+  const sh = img.height * regiao.h;
 
   const amostra = 32;
   const canvas = createCanvas(amostra, amostra);
@@ -125,6 +127,23 @@ async function corMediaRegiaoDoBotao(bufferImagem: Buffer): Promise<CorRgb> {
     n += 1;
   }
   return [Math.round(r / n), Math.round(g / n), Math.round(b / n)];
+}
+
+/**
+ * Calcula a cor média de uma imagem/frame na região onde o botão de CTA vai
+ * ficar sobreposto (centro, próximo à base) — usa corMediaAmostra acima.
+ */
+async function corMediaRegiaoDoBotao(bufferImagem: Buffer): Promise<CorRgb> {
+  return corMediaAmostra(bufferImagem, { x: 0.2, y: 0.68, w: 0.6, h: 0.28 });
+}
+
+function escurecer([r, g, b]: CorRgb, fator: number): CorRgb {
+  return [Math.round(r * fator), Math.round(g * fator), Math.round(b * fator)];
+}
+
+function paraHexFfmpeg([r, g, b]: CorRgb): string {
+  const h = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0");
+  return `0x${h(r)}${h(g)}${h(b)}`;
 }
 
 // Contraste mínimo (razão WCAG) pra uma cor ser considerada "legível o
@@ -441,12 +460,20 @@ export async function montarVideoComImagem(
   await limparEntradaBotao(entradaBotao);
 }
 
+// Faixas de variação aplicadas ao vídeo quando remixarVisual está ligado —
+// sorteadas a cada chamada, pra cada variação (e cada formato) sair com um
+// tratamento visual ligeiramente diferente entre si, além de diferente do
+// vídeo original.
+function sortear(min: number, max: number): number {
+  return min + Math.random() * (max - min);
+}
+
 /**
  * Monta um vídeo vertical (1080x1920) a partir de um CLIPE DE VÍDEO (stock) + narração,
  * cortando/repetindo o clipe para bater com a duração do áudio.
  */
 export async function montarVideoComVideo(
-  opts: MontarVideoOpts & { videoBuffer: Buffer; ajusteDeQuadro?: AjusteDeQuadro }
+  opts: MontarVideoOpts & { videoBuffer: Buffer; ajusteDeQuadro?: AjusteDeQuadro; remixarVisual?: boolean }
 ): Promise<void> {
   const { largura: W, altura: H } = FORMATOS[opts.formatoVideo ?? "vertical"];
   const margemInferior = Math.round(H * MARGEM_INFERIOR_PROPORCAO);
@@ -466,19 +493,52 @@ export async function montarVideoComVideo(
     duration
   );
 
-  const filtros =
-    ajuste === "conter"
-      ? [
-          // Fundo: preenche o quadro todo (cortando) e desfoca, só pra não
-          // deixar barras pretas feias nas laterais/topo-base.
-          `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},gblur=sigma=30[fundo]`,
-          // Primeiro plano: o vídeo INTEIRO, sem cortar nada (encolhe pra caber).
-          `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease[frente]`,
-          `[fundo][frente]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,setpts=PTS-STARTPTS[cropped]`,
-        ]
-      : [
-          `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[cropped]`,
-        ];
+  let filtros: string[];
+
+  if (ajuste === "conter" && opts.remixarVisual) {
+    // Usado só pro formato "vídeo original": em vez de reexportar o clipe
+    // praticamente idêntico (só trocando o áudio), aplica um retoque visual —
+    // corta uma borda fina (também tira qualquer marca d'água/elemento colado
+    // na beirada), um leve ajuste de cor/contraste/matiz e uma vinheta sutil,
+    // e troca o fundo desfocado (quando o vídeo não preenche o quadro todo)
+    // por uma cor sólida derivada do próprio vídeo — sorteado a cada geração,
+    // pra cada variação sair com uma "cara" um pouco diferente da outra.
+    let corFundo: CorRgb = [20, 20, 20];
+    if (frameParaCor) {
+      try {
+        corFundo = escurecer(await corMediaAmostra(frameParaCor), 0.35);
+      } catch {
+        // mantém o fallback escuro se a amostragem falhar
+      }
+    }
+    const corFundoHex = paraHexFfmpeg(corFundo);
+
+    const zoomCorte = sortear(0.92, 0.97); // corta de 3% a 8% da borda
+    const matizGraus = Math.round(sortear(-8, 8));
+    const contraste = sortear(1.0, 1.1);
+    const brilho = sortear(-0.02, 0.04);
+    const saturacao = sortear(1.05, 1.25);
+
+    filtros = [
+      `color=c=${corFundoHex}:s=${W}x${H}[fundo]`,
+      `[0:v]crop=iw*${zoomCorte.toFixed(3)}:ih*${zoomCorte.toFixed(3)},` +
+        `eq=contrast=${contraste.toFixed(3)}:brightness=${brilho.toFixed(3)}:saturation=${saturacao.toFixed(3)},` +
+        `hue=h=${matizGraus},vignette=PI/5,` +
+        `scale=${W}:${H}:force_original_aspect_ratio=decrease[frente]`,
+      `[fundo][frente]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,setpts=PTS-STARTPTS[cropped]`,
+    ];
+  } else if (ajuste === "conter") {
+    filtros = [
+      // Fundo: preenche o quadro todo (cortando) e desfoca, só pra não
+      // deixar barras pretas feias nas laterais/topo-base.
+      `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},gblur=sigma=30[fundo]`,
+      // Primeiro plano: o vídeo INTEIRO, sem cortar nada (encolhe pra caber).
+      `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease[frente]`,
+      `[fundo][frente]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,setpts=PTS-STARTPTS[cropped]`,
+    ];
+  } else {
+    filtros = [`[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},setpts=PTS-STARTPTS[cropped]`];
+  }
   let lastLabel = "cropped";
 
   if (entradaBotao) {
