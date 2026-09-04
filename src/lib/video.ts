@@ -513,21 +513,23 @@ export async function montarVideoComVideo(
     }
     const corFundoHex = paraHexFfmpeg(corFundo);
 
-    // Intensidade aumentada depois de testar em vídeo real: os valores
-    // originais (corte de até 8%, matiz até 8°) praticamente não apareciam
-    // fora de um teste com cores muito saturadas — em vídeo comum (pessoa,
-    // produto, cenário do dia a dia) passavam despercebidos.
-    const zoomCorte = sortear(0.85, 0.93); // corta de 7% a 15% da borda (zoom perceptível)
-    const matizGraus = Math.round(sortear(-20, 20));
-    const contraste = sortear(1.05, 1.2);
-    const brilho = sortear(-0.04, 0.06);
-    const saturacao = sortear(1.15, 1.4);
+    // 2ª rodada de ajuste: usuário testou em vídeo real e pediu mais
+    // intensidade ainda. O corte de borda é o único ajuste com risco real
+    // (testado: com CTA de texto largo, um corte de 10%+ já cortava as
+    // pontas do texto — inaceitável) — por isso ele NÃO sobe mais, fica no
+    // mesmo teto testado e aprovado antes. Quem sobe bastante é tudo que não
+    // tem esse risco: cor/contraste/matiz/vinheta.
+    const zoomCorte = sortear(0.85, 0.93); // corta de 7% a 15% da borda (mesmo teto de antes)
+    const matizGraus = Math.round(sortear(-32, 32));
+    const contraste = sortear(1.08, 1.28);
+    const brilho = sortear(-0.06, 0.09);
+    const saturacao = sortear(1.25, 1.6);
 
     filtros = [
       `color=c=${corFundoHex}:s=${W}x${H}[fundo]`,
       `[0:v]crop=iw*${zoomCorte.toFixed(3)}:ih*${zoomCorte.toFixed(3)},` +
         `eq=contrast=${contraste.toFixed(3)}:brightness=${brilho.toFixed(3)}:saturation=${saturacao.toFixed(3)},` +
-        `hue=h=${matizGraus},vignette=PI/4.2,` +
+        `hue=h=${matizGraus},vignette=PI/3.3,` +
         `scale=${W}:${H}:force_original_aspect_ratio=decrease[frente]`,
       `[fundo][frente]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2,setpts=PTS-STARTPTS[cropped]`,
     ];
