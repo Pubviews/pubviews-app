@@ -580,3 +580,48 @@ export async function montarVideoComVideo(
 export function novoArquivoDeSaida(): string {
   return tmpFile("mp4");
 }
+
+/**
+ * Gera uma imagem de máscara (preto = manter, branco = apagar) do MESMO
+ * tamanho real do vídeo enviado, a partir de uma região normalizada (0 a 1,
+ * relativa à largura/altura) marcada pelo usuário no navegador — usada pela
+ * IA de remoção de elemento (WaveSpeedAI, ver src/lib/wavespeed.ts). Lê as
+ * dimensões reais do vídeo com ffprobe em vez de confiar só no que o
+ * navegador reportou, pra máscara e vídeo baterem certinho.
+ */
+export async function gerarMascaraPng(
+  videoBuffer: Buffer,
+  regiao: { x: number; y: number; w: number; h: number }
+): Promise<Buffer> {
+  const vidPath = tmpFile("mp4");
+  await fs.writeFile(vidPath, videoBuffer);
+
+  let largura = 1080;
+  let altura = 1920;
+  try {
+    const dimensoes = await new Promise<{ width?: number; height?: number }>((resolve, reject) => {
+      ffmpeg.ffprobe(vidPath, (err, data) => {
+        if (err) return reject(err);
+        const streamDeVideo = data.streams.find((s) => s.codec_type === "video");
+        resolve({ width: streamDeVideo?.width, height: streamDeVideo?.height });
+      });
+    });
+    if (dimensoes.width) largura = dimensoes.width;
+    if (dimensoes.height) altura = dimensoes.height;
+  } finally {
+    await fs.unlink(vidPath).catch(() => {});
+  }
+
+  const canvas = createCanvas(largura, altura);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#000000";
+  ctx.fillRect(0, 0, largura, altura);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(
+    Math.round(regiao.x * largura),
+    Math.round(regiao.y * altura),
+    Math.round(regiao.w * largura),
+    Math.round(regiao.h * altura)
+  );
+  return canvas.toBuffer("image/png");
+}

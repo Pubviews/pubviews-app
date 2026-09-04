@@ -1,7 +1,167 @@
 "use client";
 
-import { useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { upload } from "@vercel/blob/client";
+
+interface RegiaoNormalizada {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * Deixa o usuário marcar (arrastando o mouse) um retângulo sobre um frame do
+ * vídeo original — essa área é o que a IA de remoção (WaveSpeedAI) vai tentar
+ * apagar de verdade (ex: o botão/CTA embutido na imagem). Captura o frame
+ * direto no navegador (sem precisar de nenhuma chamada ao servidor só pra
+ * isso) usando um <video> oculto + canvas.
+ */
+function SeletorDeMascara({
+  videoUrl,
+  regiao,
+  onRegiaoChange,
+}: {
+  videoUrl: string;
+  regiao: RegiaoNormalizada | null;
+  onRegiaoChange: (r: RegiaoNormalizada | null) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameImgRef = useRef<HTMLImageElement | null>(null);
+  const arrastandoRef = useRef<{ x: number; y: number } | null>(null);
+  const [carregandoFrame, setCarregandoFrame] = useState(true);
+  const [erroFrame, setErroFrame] = useState<string | null>(null);
+  const [alturaCanvas, setAlturaCanvas] = useState(500);
+  const LARGURA_CANVAS = 320;
+
+  function desenhar(regiaoAtual: RegiaoNormalizada | null) {
+    const canvas = canvasRef.current;
+    const img = frameImgRef.current;
+    if (!canvas || !img) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    if (regiaoAtual && regiaoAtual.w > 0 && regiaoAtual.h > 0) {
+      const x = regiaoAtual.x * canvas.width;
+      const y = regiaoAtual.y * canvas.height;
+      const w = regiaoAtual.w * canvas.width;
+      const h = regiaoAtual.h * canvas.height;
+      ctx.fillStyle = "rgba(229,57,53,0.35)";
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = "rgba(229,57,53,0.95)";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, w, h);
+    }
+  }
+
+  useEffect(() => {
+    let cancelado = false;
+    frameImgRef.current = null;
+
+    const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = "auto";
+    video.src = videoUrl;
+
+    function aoFalhar() {
+      if (cancelado) return;
+      setErroFrame("Não foi possível carregar um frame do vídeo pra marcar a área. Pode aplicar a remoção mesmo assim descrevendo com cuidado, ou pular essa etapa.");
+      setCarregandoFrame(false);
+    }
+
+    video.addEventListener("error", aoFalhar);
+    video.addEventListener("loadedmetadata", () => {
+      if (cancelado) return;
+      try {
+        video.currentTime = Math.min(1, (video.duration || 2) / 2);
+      } catch {
+        aoFalhar();
+      }
+    });
+    video.addEventListener("seeked", () => {
+      if (cancelado) return;
+      const w = video.videoWidth || 1080;
+      const h = video.videoHeight || 1920;
+      const canvasBase = document.createElement("canvas");
+      canvasBase.width = w;
+      canvasBase.height = h;
+      const ctxBase = canvasBase.getContext("2d");
+      if (!ctxBase) return aoFalhar();
+      try {
+        ctxBase.drawImage(video, 0, 0, w, h);
+      } catch {
+        return aoFalhar();
+      }
+      const img = new Image();
+      img.onload = () => {
+        if (cancelado) return;
+        frameImgRef.current = img;
+        setAlturaCanvas(Math.round((LARGURA_CANVAS * h) / w));
+        setCarregandoFrame(false);
+      };
+      img.onerror = aoFalhar;
+      img.src = canvasBase.toDataURL("image/png");
+    });
+
+    return () => {
+      cancelado = true;
+    };
+  }, [videoUrl]);
+
+  useEffect(() => {
+    desenhar(regiao);
+  }, [regiao, carregandoFrame]);
+
+  function posicaoRelativa(e: ReactPointerEvent<HTMLCanvasElement>) {
+    const canvas = canvasRef.current!;
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
+  }
+
+  function aoPressionar(e: ReactPointerEvent<HTMLCanvasElement>) {
+    if (carregandoFrame) return;
+    arrastandoRef.current = posicaoRelativa(e);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function aoMover(e: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!arrastandoRef.current) return;
+    const atual = posicaoRelativa(e);
+    const inicio = arrastandoRef.current;
+    const novaRegiao: RegiaoNormalizada = {
+      x: Math.min(inicio.x, atual.x),
+      y: Math.min(inicio.y, atual.y),
+      w: Math.abs(atual.x - inicio.x),
+      h: Math.abs(atual.y - inicio.y),
+    };
+    onRegiaoChange(novaRegiao);
+  }
+  function aoSoltar() {
+    arrastandoRef.current = null;
+  }
+
+  return (
+    <div>
+      {carregandoFrame && <p className="text-xs text-zinc-500">Carregando frame do vídeo...</p>}
+      {erroFrame && <p className="text-xs text-red-700">{erroFrame}</p>}
+      <canvas
+        ref={canvasRef}
+        width={LARGURA_CANVAS}
+        height={alturaCanvas}
+        onPointerDown={aoPressionar}
+        onPointerMove={aoMover}
+        onPointerUp={aoSoltar}
+        onPointerLeave={aoSoltar}
+        className="mt-2 touch-none rounded-md border border-zinc-300"
+        style={{ cursor: carregandoFrame ? "default" : "crosshair", maxWidth: "100%" }}
+      />
+    </div>
+  );
+}
 
 type Formato = "imagem" | "video" | "video_original";
 type AnimacaoCta = "estatico" | "pulsar" | "piscar";
@@ -103,6 +263,52 @@ export default function VariacoesPage() {
   const [analisandoVideo, setAnalisandoVideo] = useState(false);
   const [erroAnaliseVideo, setErroAnaliseVideo] = useState<string | null>(null);
 
+  // Remoção de elemento com IA (WaveSpeedAI) — opcional: o usuário marca uma
+  // área no frame do vídeo (ex: o botão/texto de CTA embutido) e a gente
+  // manda apagar de verdade, UMA vez só por vídeo enviado (não a cada
+  // variação gerada — o resultado fica salvo e é reaproveitado por todas as
+  // variações que usarem esse vídeo). Sem isso, o vídeo original continua
+  // passando só pelo retoque visual (cor/corte/vinheta) de antes.
+  const [regiaoParaApagar, setRegiaoParaApagar] = useState<RegiaoNormalizada | null>(null);
+  const [videoOriginalUrlEditado, setVideoOriginalUrlEditado] = useState<string | null>(null);
+  const [aplicandoRemocao, setAplicandoRemocao] = useState(false);
+  const [erroRemocao, setErroRemocao] = useState<string | null>(null);
+
+  function limparRemocaoDeElemento() {
+    setRegiaoParaApagar(null);
+    setVideoOriginalUrlEditado(null);
+    setErroRemocao(null);
+  }
+
+  async function aplicarRemocaoDeElemento() {
+    if (!videoOriginalUrl || !regiaoParaApagar || regiaoParaApagar.w <= 0 || regiaoParaApagar.h <= 0) return;
+    setAplicandoRemocao(true);
+    setErroRemocao(null);
+    try {
+      const res = await fetch("/api/variacoes/apagar-elemento", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoUrl: videoOriginalUrl, regiao: regiaoParaApagar }),
+        // Bem folgado: a IA de remoção demora, em média, ~161s pra processar.
+        signal: AbortSignal.timeout(270000),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Erro ao remover o elemento com IA.");
+      setVideoOriginalUrlEditado(json.videoUrl);
+    } catch (err) {
+      const timeout = err instanceof Error && err.name === "TimeoutError";
+      setErroRemocao(
+        timeout
+          ? "A remoção demorou demais e foi cancelada. Tente de novo."
+          : err instanceof Error
+            ? err.message
+            : String(err)
+      );
+    } finally {
+      setAplicandoRemocao(false);
+    }
+  }
+
   async function selecionarVideoOriginal(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = ""; // permite selecionar o mesmo arquivo de novo depois
@@ -118,6 +324,7 @@ export default function VariacoesPage() {
     setAnalisandoVideo(true);
     setErroAnaliseVideo(null);
     setDescricaoVisualOriginal(null);
+    limparRemocaoDeElemento();
     try {
       // Sobe o arquivo direto do navegador pro Vercel Blob — não passa pelo
       // corpo de nenhuma função nossa, então não esbarra no limite de ~4.5MB
@@ -166,6 +373,7 @@ export default function VariacoesPage() {
     setVideoOriginalNome(null);
     setDescricaoVisualOriginal(null);
     setErroAnaliseVideo(null);
+    limparRemocaoDeElemento();
   }
 
   // Link de um anúncio específico da Ad Library que o usuário encontrou
@@ -206,6 +414,7 @@ export default function VariacoesPage() {
         setVideoOriginalUrl(json.videoOriginalUrl);
         setVideoOriginalNome(`Anúncio da Ad Library${json.pageName ? " — " + json.pageName : ""}`);
         setDescricaoVisualOriginal(json.descricaoVisualOriginal || "");
+        limparRemocaoDeElemento();
       }
       if (json.imagemPreviewUrl) setImagemPreviewBiblioteca(json.imagemPreviewUrl);
       if (json.aviso) setAvisoBiblioteca(json.aviso);
@@ -286,7 +495,11 @@ export default function VariacoesPage() {
       // do botão que já existe no vídeo.
       textoOverlay: card.formato === "video_original" ? undefined : card.textoOverlay || undefined,
       animacaoCta: card.formato === "video_original" ? undefined : card.animacaoCta,
-      videoOriginalUrl: card.formato === "video_original" ? videoOriginalUrl || undefined : undefined,
+      // Prioriza a versão já com o elemento removido pela IA (quando o
+      // usuário aplicou essa remoção) — senão cai no vídeo original de
+      // sempre, que ainda passa pelo retoque visual (cor/corte/vinheta).
+      videoOriginalUrl:
+        card.formato === "video_original" ? videoOriginalUrlEditado || videoOriginalUrl || undefined : undefined,
       // Só pra ficar salvo junto no histórico (não muda a geração em si).
       nicho: nicho || undefined,
       referencia: referencia || undefined,
@@ -419,6 +632,65 @@ export default function VariacoesPage() {
             </p>
           )}
         </div>
+
+        {videoOriginalUrl && !analisandoVideo && (
+          <div className="rounded-md border border-dashed border-zinc-300 p-3">
+            <label className="block text-sm font-medium text-zinc-700">
+              Remover um elemento do vídeo original com IA (opcional)
+            </label>
+            <p className="mt-1 text-xs text-zinc-500">
+              O retoque visual (cor/corte/vinheta) já é aplicado automaticamente em toda variação
+              que usa esse vídeo. Se quiser ir além e apagar de verdade algo específico (ex: o
+              botão/texto de CTA já embutido no vídeo), marque a área abaixo e aplique — é pago
+              (~$0,02 por segundo de vídeo) e demora cerca de 3 minutos, mas só precisa ser feito
+              UMA vez: o resultado vale pra todas as variações que reaproveitarem esse vídeo.
+            </p>
+
+            <SeletorDeMascara
+              key={videoOriginalUrl}
+              videoUrl={videoOriginalUrl}
+              regiao={regiaoParaApagar}
+              onRegiaoChange={(r) => {
+                setRegiaoParaApagar(r);
+                setVideoOriginalUrlEditado(null); // uma nova marcação invalida o resultado anterior
+                setErroRemocao(null);
+              }}
+            />
+
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <button
+                onClick={aplicarRemocaoDeElemento}
+                type="button"
+                disabled={
+                  aplicandoRemocao || !regiaoParaApagar || regiaoParaApagar.w <= 0 || regiaoParaApagar.h <= 0
+                }
+                className="rounded-md bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
+              >
+                {aplicandoRemocao ? "Removendo com IA... (pode levar uns 3 min)" : "Aplicar remoção com IA"}
+              </button>
+              {(regiaoParaApagar || videoOriginalUrlEditado) && (
+                <button
+                  onClick={limparRemocaoDeElemento}
+                  type="button"
+                  disabled={aplicandoRemocao}
+                  className="text-xs text-zinc-500 underline underline-offset-2 disabled:opacity-40"
+                >
+                  limpar seleção
+                </button>
+              )}
+            </div>
+            {erroRemocao && <p className="mt-2 text-sm text-red-700">{erroRemocao}</p>}
+            {videoOriginalUrlEditado && !aplicandoRemocao && (
+              <div className="mt-3">
+                <p className="text-sm text-green-700">
+                  Elemento removido — esse vídeo (já editado) vai ser usado em toda variação com
+                  &quot;Vídeo original enviado&quot;.
+                </p>
+                <video src={videoOriginalUrlEditado} controls className="mt-2 max-h-64 rounded-md border border-zinc-200" />
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="rounded-md border border-dashed border-zinc-300 p-3">
           <label className="block text-sm font-medium text-zinc-700">

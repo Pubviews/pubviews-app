@@ -15,4 +15,5 @@ export const env = {
   googleAiApiKey: () => required("GOOGLE_AI_API_KEY"),
   pexelsApiKey: () => required("PEXELS_API_KEY"),
   appPassword: () => process.env.APP_PASSWORD || "",
+  waveSpeedApiKey: () => required("WAVESPEED_API_KEY"),
 };
