@@ -426,6 +426,40 @@ export async function sugerirTermosDeBusca(descricao: string): Promise<string> {
   return raw.trim().replace(/["\n]/g, "");
 }
 
+/**
+ * A partir do <title>/meta description da página inicial de um site, tenta
+ * adivinhar um termo de busca curto (2 a 4 palavras) que descreva a
+ * marca/produto — usado pelo Garimpo quando o usuário busca só por site, sem
+ * nenhum termo de nicho (a Ad Library API não tem NENHUM parâmetro pra
+ * buscar direto por domínio, então essa é a melhor tentativa automática
+ * disponível). Best-effort: devolve string vazia se o conteúdo for genérico
+ * demais pra identificar algo (página em branco, erro, bloqueio de bot —
+ * comum em domínio de rastreamento com cloaking).
+ */
+export async function sugerirTermoDeBuscaDoSite(titulo: string, descricao: string): Promise<string> {
+  const conteudo = [titulo, descricao].filter(Boolean).join(" — ").slice(0, 500);
+  if (!conteudo.trim()) return "";
+
+  const json = await callGemini(TEXT_MODEL, {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              `Abaixo está o título e a descrição da página inicial de um site. Baseado só nisso, dê um termo de busca curto (2 a 4 palavras) que descreva a MARCA ou o PRODUTO/SERVIÇO vendido nesse site — algo que funcione como busca de palavra-chave na Meta Ad Library pra achar os anúncios dessa marca. Se o conteúdo for genérico demais pra identificar um produto (ex: página em branco, mensagem de erro, "acesso negado", texto sem sentido), responda só com a string vazia (nada).\n\n` +
+              `Conteúdo da página:\n${conteudo}\n\n` +
+              `Responda só o termo de busca (ou nada), sem aspas, sem explicação.`,
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0.3 },
+  });
+  const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  return raw.trim().replace(/["\n]/g, "");
+}
+
 export interface PaginaParaClassificar {
   page_id: string;
   page_name: string;

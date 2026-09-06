@@ -242,11 +242,18 @@ function GarimpoConteudo() {
   const termoInicial = searchParams.get("termo") || "";
 
   const [searchTerms, setSearchTerms] = useState(termoInicial);
-  // Site/domínio opcional (ex: "flowquest.com") — pode ser usado sozinho
-  // (busca tudo que esse site roda, agrupado por nicho) ou junto com o termo
-  // de busca acima (filtra o nicho buscado só pras páginas desse site).
+  // Site/domínio opcional (ex: "flowquest.com") — usado sozinho, filtra o
+  // resultado só pros anúncios que mostram esse domínio (ver pageIds abaixo
+  // pra busca garantida) ou junto com o termo de busca acima (filtra o nicho
+  // buscado só pras páginas desse site).
   const [site, setSite] = useState("");
-  const [countries, setCountries] = useState("US");
+  // ID(s) de página da Meta (colados manualmente pelo usuário a partir da Ad
+  // Library — abra facebook.com/ads/library, busque o nome da marca e copie
+  // o ID da URL) — é o único jeito garantido de achar TUDO que uma página
+  // roda, já que a Ad Library API não tem parâmetro nenhum de busca por
+  // domínio. Aceita vários, separados por vírgula.
+  const [pageIds, setPageIds] = useState("");
+  const [countries, setCountries] = useState("");
   const [ampliar, setAmpliar] = useState(true);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -257,10 +264,11 @@ function GarimpoConteudo() {
   const [termosComResultado, setTermosComResultado] = useState<string[]>([]);
   const [termosTentados, setTermosTentados] = useState<string[]>([]);
   const [nichos, setNichos] = useState<NichoResumo[]>([]);
+  const [termoAdivinhadoDoSite, setTermoAdivinhadoDoSite] = useState<string | null>(null);
 
   async function buscar(termoParaBuscar?: string) {
     const termo = termoParaBuscar ?? searchTerms;
-    if (!termo && !site) return;
+    if (!termo && !site && !pageIds.trim()) return;
     setLoading(true);
     setError(null);
     setResultados(null);
@@ -270,6 +278,7 @@ function GarimpoConteudo() {
     setTermosComResultado([]);
     setTermosTentados([]);
     setNichos([]);
+    setTermoAdivinhadoDoSite(null);
     try {
       const res = await fetch("/api/garimpo", {
         method: "POST",
@@ -277,6 +286,10 @@ function GarimpoConteudo() {
         body: JSON.stringify({
           searchTerms: termo || undefined,
           site: site.trim() || undefined,
+          pageIds: pageIds
+            .split(",")
+            .map((p) => p.trim())
+            .filter(Boolean),
           countries: countries
             .split(",")
             .map((c) => c.trim().toUpperCase())
@@ -293,6 +306,7 @@ function GarimpoConteudo() {
       setTermosComResultado(json.termosComResultado || []);
       setTermosTentados(json.termosTentados || []);
       setNichos(json.nichos || []);
+      setTermoAdivinhadoDoSite(json.termoAdivinhadoDoSite || null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -321,9 +335,9 @@ function GarimpoConteudo() {
         campeão de fato.
       </p>
 
-      <div className="mt-6 flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-6 sm:flex-row sm:items-end">
+      <div className="mt-6 flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-6 sm:flex-row sm:flex-wrap sm:items-end">
         <div className="flex-1">
-          <label className="block text-sm font-medium text-zinc-700">Termo de busca (opcional se preencher o site)</label>
+          <label className="block text-sm font-medium text-zinc-700">Termo de busca (opcional)</label>
           <input
             value={searchTerms}
             onChange={(e) => setSearchTerms(e.target.value)}
@@ -332,11 +346,20 @@ function GarimpoConteudo() {
           />
         </div>
         <div className="flex-1">
-          <label className="block text-sm font-medium text-zinc-700">Site (opcional)</label>
+          <label className="block text-sm font-medium text-zinc-700">Site (opcional, filtro)</label>
           <input
             value={site}
             onChange={(e) => setSite(e.target.value)}
             placeholder="ex: flowquest.com"
+            className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="flex-1">
+          <label className="block text-sm font-medium text-zinc-700">ID(s) da página (opcional, vírgula)</label>
+          <input
+            value={pageIds}
+            onChange={(e) => setPageIds(e.target.value)}
+            placeholder="ex: 123456789012345"
             className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
           />
         </div>
@@ -345,23 +368,45 @@ function GarimpoConteudo() {
           <input
             value={countries}
             onChange={(e) => setCountries(e.target.value)}
-            placeholder="US,CA,GB"
+            placeholder="em branco = vários"
             className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
           />
         </div>
         <button
           onClick={() => buscar()}
-          disabled={loading || (!searchTerms && !site)}
+          disabled={loading || (!searchTerms && !site && !pageIds.trim())}
           className="rounded-md bg-brand px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
         >
           {loading ? "Buscando..." : "Buscar"}
         </button>
       </div>
+      <p className="mt-2 text-xs text-zinc-500">
+        A Ad Library da Meta não tem busca direta por domínio — sem nenhum termo nem ID de página, a gente tenta
+        adivinhar um termo a partir do próprio conteúdo do site (pode não achar tudo). Pra garantir 100% do que uma
+        página roda, cole o ID dela (abra{" "}
+        <a
+          href="https://www.facebook.com/ads/library/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-brand underline underline-offset-2"
+        >
+          facebook.com/ads/library
+        </a>
+        , busque o nome da marca e copie o ID da URL do anúncio/página). Deixe &quot;Países&quot; em branco pra
+        buscar numa lista ampla de mercados de uma vez (a API exige pelo menos um país — não existe busca mundial).
+      </p>
       {site && (
-        <p className="mt-2 text-xs text-zinc-500">
+        <p className="mt-1 text-xs text-zinc-500">
           Com um site preenchido, a busca também agrupa os resultados por nicho (o site pode estar rodando mais de
           um ao mesmo tempo) — veja a seção &quot;Nichos encontrados nesse site&quot; abaixo da tabela.
         </p>
+      )}
+      {termoAdivinhadoDoSite && (
+        <div className="mt-2 rounded-md bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+          Sem termo de busca informado — tentamos adivinhar a partir do próprio site e buscamos por{" "}
+          <strong>&quot;{termoAdivinhadoDoSite}&quot;</strong>. Esse resultado pode ser parcial; pra ver
+          garantidamente tudo que a página roda, cole o ID dela no campo acima.
+        </div>
       )}
 
       <label className="mt-3 flex items-center gap-2 text-sm text-zinc-600">
@@ -447,16 +492,19 @@ function GarimpoConteudo() {
         </div>
       )}
 
-      {resultados && site && (
+      {resultados && (site || pageIds.trim()) && (
         <div className="mt-8">
-          <h2 className="text-lg font-semibold tracking-tight">Nichos encontrados nesse site</h2>
+          <h2 className="text-lg font-semibold tracking-tight">
+            {site ? "Nichos encontrados nesse site" : "Nichos encontrados nessa(s) página(s)"}
+          </h2>
           <p className="mt-1 text-sm text-zinc-600">
-            Todos os nichos que <strong>{site}</strong> está rodando nessa busca — o(s) marcado(s) como CANDIDATO
-            FORTE tem alguma página muito duplicada (3+ anúncios simultâneos) e rodando há 30+ dias, o sinal mais
-            forte de que já é um vencedor. Clique num nicho pra ver as páginas por trás dele.
+            Todos os nichos que {site ? <strong>{site}</strong> : "essa(s) página(s)"} est{site ? "á" : "ão"} rodando
+            nessa busca — o(s) marcado(s) como CANDIDATO FORTE tem alguma página muito duplicada (3+ anúncios
+            simultâneos) e rodando há 30+ dias, o sinal mais forte de que já é um vencedor. Clique num nicho pra ver
+            as páginas por trás dele.
           </p>
           {nichos.length === 0 ? (
-            <p className="mt-4 text-sm text-zinc-500">Nenhum anúncio ativo encontrado pra esse site.</p>
+            <p className="mt-4 text-sm text-zinc-500">Nenhum anúncio ativo encontrado.</p>
           ) : (
             <div className="mt-4 space-y-2">
               {nichos.map((n) => (

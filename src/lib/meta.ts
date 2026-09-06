@@ -93,6 +93,49 @@ function normalizarDominio(valor: string): string {
 }
 
 /**
+ * Busca (best-effort) o <title> e a meta description da página inicial de um
+ * site — usado só como matéria-prima pra IA adivinhar um termo de busca
+ * quando o usuário só informa o "site" no Garimpo, sem nenhum termo de nicho
+ * (ver sugerirTermoDeBuscaDoSite/searchAdLibrary). IMPORTANTE: a Ad Library
+ * API não tem NENHUM parâmetro pra buscar direto por domínio — confirmado
+ * testando e na documentação da Meta — então essa é a única forma automática
+ * de tentar achar algo sem o usuário digitar um nicho ou colar um ID de
+ * página. Pode falhar ou vir vazio (site fora do ar, bloqueando bots, ou
+ * fazendo cloaking pra visitantes não confiáveis, comum em domínio de
+ * rastreamento) — nesse caso quem chama simplesmente segue sem termo
+ * adivinhado, nunca derruba a busca.
+ */
+async function buscarHtmlDoSite(site: string): Promise<{ titulo: string; descricao: string } | null> {
+  const dominio = normalizarDominio(site);
+  if (!dominio) return null;
+  for (const url of [`https://${dominio}`, `http://${dominio}`]) {
+    try {
+      const res = await fetch(url, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(8000),
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        },
+      });
+      if (!res.ok) continue;
+      const html = await res.text();
+      const titulo = (html.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1] || "").trim();
+      const descricao = (
+        html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)["']/i)?.[1] ||
+        html.match(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)["']/i)?.[1] ||
+        ""
+      ).trim();
+      if (!titulo && !descricao) continue;
+      return { titulo, descricao };
+    } catch {
+      continue; // tenta o próximo protocolo, ou desiste (best-effort)
+    }
+  }
+  return null;
+}
+
+/**
  * Entre todos os anúncios ativos encontrados na busca (não só os de páginas
  * CANDIDATO), conta quantas vezes cada Texto Principal/Título/Descrição
  * exato se repete — o mesmo raciocínio de "duplicação = sinal de que já
@@ -157,6 +200,61 @@ export async function buscarAnunciosAtivos(params: {
   let pages = 0;
 
   while (nextUrl && pages < 5 && allAds.length < limit) {
+    const res: Response = await fetch(nextUrl);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`Meta Ad Library API erro ${res.status}: ${body}`);
+    }
+    const json: { data?: AdLibraryAd[]; paging?: { next?: string } } = await res.json();
+    const data: AdLibraryAd[] = json.data ?? [];
+    allAds.push(...data);
+    nextUrl = json.paging?.next ?? null;
+    pages += 1;
+  }
+
+  return allAds;
+}
+
+// Limite documentado da Meta pra quantos IDs de página dá pra mandar numa
+// única chamada de search_page_ids.
+const MAX_PAGE_IDS_POR_BUSCA = 10;
+
+/**
+ * Busca anúncios ativos direto pelo(s) ID(s) de página (search_page_ids) —
+ * o único jeito 100% confiável de buscar "tudo que uma página específica
+ * roda" (a Ad Library API não tem parâmetro nenhum pra buscar por domínio,
+ * só por palavra-chave no texto do anúncio ou por ID de página já conhecido).
+ * Usado no Garimpo quando o usuário cola o(s) ID(s) da página encontrados
+ * manualmente na Ad Library (ver campo "ID(s) da página" na tela).
+ */
+export async function buscarAnunciosAtivosPorPageIds(
+  pageIds: string[],
+  countries: string[],
+  limit?: number
+): Promise<AdLibraryAd[]> {
+  const ids = pageIds.slice(0, MAX_PAGE_IDS_POR_BUSCA);
+  if (ids.length === 0) return [];
+
+  const token = env.metaAccessToken();
+  const lim = limit ?? 200;
+
+  const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/ads_archive`);
+  url.searchParams.set("access_token", token);
+  url.searchParams.set("search_page_ids", JSON.stringify(ids));
+  url.searchParams.set("ad_type", "ALL");
+  url.searchParams.set("ad_active_status", "ACTIVE");
+  url.searchParams.set("ad_reached_countries", JSON.stringify(countries));
+  url.searchParams.set(
+    "fields",
+    "id,page_id,page_name,ad_delivery_start_time,ad_snapshot_url,ad_creative_link_captions,ad_creative_bodies,ad_creative_link_titles,ad_creative_link_descriptions"
+  );
+  url.searchParams.set("limit", String(Math.min(lim, 200)));
+
+  const allAds: AdLibraryAd[] = [];
+  let nextUrl: string | null = url.toString();
+  let pages = 0;
+
+  while (nextUrl && pages < 5 && allAds.length < lim) {
     const res: Response = await fetch(nextUrl);
     if (!res.ok) {
       const body = await res.text();
@@ -279,9 +377,14 @@ export interface BuscaGarimpoAmpliada {
   // Entre os termosTentados, os que realmente trouxeram algum anúncio a mais
   // — é o que vale mostrar pro usuário como "também buscamos por".
   termosComResultado: string[];
-  // Ranking por nicho (só preenchido quando a busca incluiu um "site") — ver
-  // montarRankingDeNichos.
+  // Ranking por nicho (só preenchido quando a busca incluiu um "site" ou
+  // IDs de página) — ver montarRankingDeNichos.
   nichos: NichoResumo[];
+  // Termo de busca que a IA adivinhou a partir do próprio conteúdo do site
+  // (só preenchido quando o usuário buscou só por site, sem termo nem IDs de
+  // página) — mostrado pro usuário pra deixar claro que o resultado é uma
+  // tentativa, não uma busca exaustiva. Ver buscarHtmlDoSite/searchAdLibrary.
+  termoAdivinhadoDoSite?: string;
 }
 
 export interface NichoResumo {
@@ -397,70 +500,121 @@ async function montarRankingDeNichos(
  *
  * `site`: opcional — domínio (ex: "flowquest.com") pra restringir o
  * resultado só aos anúncios que mostram esse site (via
- * ad_creative_link_captions). Pode vir sozinho (busca "tudo que esse site
- * roda", usando o próprio domínio como palavra-chave pra Meta, best-effort)
- * ou junto com searchTerms (busca o nicho normalmente e filtra o resultado
- * só pras páginas desse site). Quando presente, monta também o ranking por
- * nicho (ver montarRankingDeNichos) — só nesse caso, pra não gastar uma
- * chamada de IA extra em toda busca comum por palavra-chave.
+ * ad_creative_link_captions). IMPORTANTE: a Ad Library API não tem NENHUM
+ * parâmetro pra buscar direto por domínio (confirmado testando e na
+ * documentação da Meta) — então "site" sozinho, sem termo nem IDs de página,
+ * só funciona de um jeito best-effort: a gente busca o próprio conteúdo da
+ * página inicial do site e pede pra IA adivinhar um termo de busca a partir
+ * disso (ver buscarHtmlDoSite/sugerirTermoDeBuscaDoSite) — pode não achar
+ * tudo. Combinado com searchTerms, filtra o nicho buscado só pras páginas
+ * desse site.
+ *
+ * `pageIds`: opcional — ID(s) de página da Meta (colados manualmente pelo
+ * usuário a partir da Ad Library) pra buscar 100% das ativas daquela(s)
+ * página(s) via search_page_ids, sem depender de nenhuma adivinhação de
+ * palavra-chave. É o único jeito garantido de "ver tudo que uma página
+ * roda" — pode ser usado sozinho ou somado a uma busca por termo/site (os
+ * resultados de ambos são combinados antes de agrupar/filtrar).
+ *
+ * Quando a busca inclui site e/ou pageIds, monta também o ranking por nicho
+ * (ver montarRankingDeNichos) — só nesse caso, pra não gastar uma chamada de
+ * IA extra em toda busca comum por palavra-chave.
  */
 export async function searchAdLibrary(params: {
   searchTerms?: string;
   site?: string;
+  pageIds?: string[];
   countries: string[];
   limit?: number;
   ampliar?: boolean;
 }): Promise<BuscaGarimpoAmpliada> {
   const searchTerms = params.searchTerms?.trim() || undefined;
   const site = params.site?.trim() || undefined;
-  if (!searchTerms && !site) {
-    throw new Error("Informe um termo de busca ou um site.");
+  const pageIds = Array.from(
+    new Set((params.pageIds ?? []).map((p) => p.trim()).filter((p) => /^\d+$/.test(p)))
+  );
+
+  if (!searchTerms && !site && pageIds.length === 0) {
+    throw new Error("Informe um termo de busca, um site ou um ID de página.");
   }
-  // Sem palavra-chave de nicho, usa o próprio domínio como termo de busca pra
-  // Meta (best-effort — a API não tem um parâmetro oficial de "buscar por
-  // domínio"); o filtro por site logo abaixo garante precisão de qualquer
-  // forma, mesmo que essa busca inicial traga ruído.
-  const termoParaMeta = searchTerms || site!;
 
-  const adsOriginal = await buscarAnunciosAtivos({
-    searchTerms: termoParaMeta,
-    countries: params.countries,
-    limit: params.limit,
-  });
+  let termoParaBusca = searchTerms;
+  let termoAdivinhadoDoSite: string | undefined;
 
-  const adsPorTermo = new Map<string, AdLibraryAd[]>([[termoParaMeta, adsOriginal]]);
+  // Sem termo de busca explícito e sem IDs de página colados: a única forma
+  // automática de achar alguma coisa é tentar adivinhar um termo a partir do
+  // próprio conteúdo do site (best-effort — ver o comentário da função).
+  if (!termoParaBusca && site && pageIds.length === 0) {
+    try {
+      const pagina = await buscarHtmlDoSite(site);
+      if (pagina) {
+        const { sugerirTermoDeBuscaDoSite } = await import("./gemini");
+        const sugerido = await sugerirTermoDeBuscaDoSite(pagina.titulo, pagina.descricao);
+        if (sugerido) {
+          termoParaBusca = sugerido;
+          termoAdivinhadoDoSite = sugerido;
+        }
+      }
+    } catch {
+      // best-effort — segue sem termo adivinhado (ainda tenta com pageIds,
+      // se tiver; senão a busca simplesmente não acha nada, e quem chama já
+      // orienta o usuário a colar um termo ou um ID de página)
+    }
+  }
+
+  const adsPorTermo = new Map<string, AdLibraryAd[]>();
   let termosTentados: string[] = [];
 
-  const paginasDistintas = new Set(adsOriginal.map((a) => a.page_id)).size;
-  // Ampliação com termos parecidos só faz sentido pra busca por
-  // palavra-chave de nicho — um domínio não tem "sinônimo".
-  const devePermitirAmpliar = params.ampliar !== false && !!searchTerms;
+  if (termoParaBusca) {
+    const adsOriginal = await buscarAnunciosAtivos({
+      searchTerms: termoParaBusca,
+      countries: params.countries,
+      limit: params.limit,
+    });
+    adsPorTermo.set(termoParaBusca, adsOriginal);
 
-  if (devePermitirAmpliar && paginasDistintas < LIMIAR_PARA_AMPLIAR) {
-    let termosSugeridos: string[] = [];
-    try {
-      // Import feito aqui dentro (não no topo do arquivo) só pra manter este
-      // módulo (integração com a Meta) sem depender do módulo do Gemini a
-      // menos que a ampliação realmente seja usada.
-      const { sugerirTermosRelacionados } = await import("./gemini");
-      termosSugeridos = await sugerirTermosRelacionados(searchTerms!, MAX_TERMOS_EXTRAS);
-    } catch {
-      termosSugeridos = []; // IA fora do ar — segue só com o termo original
-    }
+    const paginasDistintas = new Set(adsOriginal.map((a) => a.page_id)).size;
+    const devePermitirAmpliar = params.ampliar !== false;
 
-    termosTentados = termosSugeridos;
-    const resultadosExtras = await Promise.all(
-      termosSugeridos.map((termo) =>
-        buscarAnunciosAtivos({ searchTerms: termo, countries: params.countries, limit: params.limit }).catch(
-          () => [] as AdLibraryAd[]
+    if (devePermitirAmpliar && paginasDistintas < LIMIAR_PARA_AMPLIAR) {
+      let termosSugeridos: string[] = [];
+      try {
+        // Import feito aqui dentro (não no topo do arquivo) só pra manter
+        // este módulo (integração com a Meta) sem depender do módulo do
+        // Gemini a menos que a ampliação realmente seja usada.
+        const { sugerirTermosRelacionados } = await import("./gemini");
+        termosSugeridos = await sugerirTermosRelacionados(termoParaBusca, MAX_TERMOS_EXTRAS);
+      } catch {
+        termosSugeridos = []; // IA fora do ar — segue só com o termo original
+      }
+
+      termosTentados = termosSugeridos;
+      const resultadosExtras = await Promise.all(
+        termosSugeridos.map((termo) =>
+          buscarAnunciosAtivos({ searchTerms: termo, countries: params.countries, limit: params.limit }).catch(
+            () => [] as AdLibraryAd[]
+          )
         )
-      )
-    );
-    termosSugeridos.forEach((termo, i) => adsPorTermo.set(termo, resultadosExtras[i]));
+      );
+      termosSugeridos.forEach((termo, i) => adsPorTermo.set(termo, resultadosExtras[i]));
+    }
   }
 
-  // Junta tudo, removendo duplicata (mesmo anúncio pode aparecer pra mais de
-  // um termo de busca) pelo id do anúncio.
+  if (pageIds.length > 0) {
+    try {
+      const adsDasPaginas = await buscarAnunciosAtivosPorPageIds(pageIds, params.countries, params.limit);
+      adsPorTermo.set(`page_ids:${pageIds.join(",")}`, adsDasPaginas);
+    } catch (err) {
+      // Se já tem resultado de alguma busca por termo, não derruba a busca
+      // inteira por causa só do reforço dos IDs — mas se os IDs de página
+      // eram a ÚNICA fonte, propaga o erro (senão o usuário fica sem
+      // nenhuma explicação de por que não achou nada).
+      if (adsPorTermo.size === 0) throw err;
+    }
+  }
+
+  // Junta tudo, removendo duplicata (mesmo anúncio pode aparecer em mais de
+  // uma fonte) pelo id do anúncio.
   const todosOsAdsPorId = new Map<string, AdLibraryAd>();
   for (const ads of adsPorTermo.values()) {
     for (const ad of ads) todosOsAdsPorId.set(ad.id, ad);
@@ -468,8 +622,8 @@ export async function searchAdLibrary(params: {
   let todosOsAds = Array.from(todosOsAdsPorId.values());
 
   // Filtro por site: mantém só os anúncios cujo domínio mostrado bate com o
-  // pedido — necessário mesmo quando a busca original já usou o domínio como
-  // palavra-chave, porque a busca por texto da Meta pode trazer "parecidos"
+  // pedido — necessário mesmo quando a busca já usou um termo adivinhado do
+  // próprio site, porque a busca por texto da Meta pode trazer "parecidos"
   // que não são de fato desse site.
   if (site) {
     const siteNormalizado = normalizarDominio(site);
@@ -483,14 +637,16 @@ export async function searchAdLibrary(params: {
 
   const termosComResultado = termosTentados.filter((termo) => (adsPorTermo.get(termo)?.length ?? 0) > 0);
   const busca = montarResultadoGarimpo(todosOsAds);
-  const nichos = site ? await montarRankingDeNichos(todosOsAds, busca.resultados) : [];
+  const deveMontarNichos = !!site || pageIds.length > 0;
+  const nichos = deveMontarNichos ? await montarRankingDeNichos(todosOsAds, busca.resultados) : [];
 
   return {
     ...busca,
-    termoOriginal: searchTerms || site!,
+    termoOriginal: termoParaBusca || site || `IDs de página: ${pageIds.join(", ")}`,
     termosTentados,
     termosComResultado,
     nichos,
+    termoAdivinhadoDoSite,
   };
 }
 
@@ -663,11 +819,11 @@ export async function buscarAnuncioRenderizado(adId: string): Promise<RaspagemDo
   return abrirERasparAnuncio(url);
 }
 
-// Países usados pra tentar achar o anúncio específico dentro da página (a
-// Ad Library exige um filtro de país na busca) — uma lista de mercados
-// comuns, já que a gente não sabe de antemão em quais países esse anúncio
-// específico foi veiculado.
-const PAISES_BUSCA_PADRAO = ["US", "CA", "GB", "AU", "BR", "PT"];
+// Países usados como padrão quando o usuário não especifica nenhum — a Ad
+// Library EXIGE um filtro de país em toda busca (não existe "todos os
+// países"/mundial na API), então uma lista de mercados comuns é o jeito mais
+// próximo de "buscar de forma ampla" sem o usuário precisar digitar nada.
+export const PAISES_BUSCA_PADRAO = ["US", "CA", "GB", "AU", "BR", "PT"];
 
 /**
  * Reforço opcional: procura o anúncio dentro dos anúncios (ativos ou não) de
