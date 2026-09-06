@@ -206,7 +206,17 @@ interface CardVariacao {
   videoUrlQuadrado: string | null;
   progressoDuploPct: number | null;
   progressoDuploMensagem: string | null;
+  // Tradução do criativo (roteiro + título/selo/CTA) pra outro idioma — ver
+  // traduzirCard. "" = nenhum idioma escolhido ainda; "outro" usa o campo
+  // livre idiomaTraducaoCustom. Sempre cria um card NOVO (cópia) já
+  // traduzido, mantendo este intacto.
+  idiomaTraducao: string;
+  idiomaTraducaoCustom: string;
+  traduzindo: boolean;
+  erroTraducao: string | null;
 }
+
+const IDIOMAS_TRADUCAO = ["Português", "Inglês", "Espanhol", "Francês", "Alemão", "Italiano"];
 
 function base64ParaUrlDeVideo(base64: string, mimeType = "video/mp4"): string {
   const bytes = atob(base64);
@@ -646,6 +656,10 @@ export default function VariacoesPage() {
         videoUrlQuadrado: null,
         progressoDuploPct: null,
         progressoDuploMensagem: null,
+        idiomaTraducao: "",
+        idiomaTraducaoCustom: "",
+        traduzindo: false,
+        erroTraducao: null,
       }));
       setCards(novosCards);
     } catch (err) {
@@ -775,6 +789,74 @@ export default function VariacoesPage() {
         progressoDuploPct: null,
         progressoDuploMensagem: null,
       });
+    }
+  }
+
+  /**
+   * Traduz o roteiro (narração) e, quando existirem, o CTA/título/selo desse
+   * card pra outro idioma via IA — sempre cria um card NOVO (cópia, logo
+   * depois do original na lista), mantendo o original intacto pra gerar e
+   * comparar os dois idiomas lado a lado. Não gera vídeo nenhum aqui: o
+   * usuário clica em "Gerar vídeo" no card traduzido normalmente, do mesmo
+   * jeito que qualquer outro card (a narração nova e os elementos gráficos
+   * saem já no idioma escolhido).
+   */
+  async function traduzirCard(idx: number) {
+    const card = cards[idx];
+    const idioma = card.idiomaTraducao === "outro" ? card.idiomaTraducaoCustom.trim() : card.idiomaTraducao;
+    if (!idioma) return;
+    atualizarCard(idx, { traduzindo: true, erroTraducao: null });
+    try {
+      const res = await fetch("/api/variacoes/traduzir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          texto: card.texto,
+          textoOverlay: card.textoOverlay || undefined,
+          // Título/selo só existem de fato no formato "video" (banco de
+          // imagens) — ver ElementosGraficos em src/lib/video.ts.
+          tituloTopo: card.formato === "video" ? card.tituloTopo || undefined : undefined,
+          seloTexto: card.formato === "video" ? card.seloTexto || undefined : undefined,
+          idioma,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Erro ao traduzir.");
+
+      const novoCard: CardVariacao = {
+        ...card,
+        texto: typeof json.texto === "string" ? json.texto : card.texto,
+        textoOverlay: typeof json.textoOverlay === "string" ? json.textoOverlay : card.textoOverlay,
+        tituloTopo: typeof json.tituloTopo === "string" ? json.tituloTopo : card.tituloTopo,
+        seloTexto: typeof json.seloTexto === "string" ? json.seloTexto : card.seloTexto,
+        // A cópia nasce "limpa": sem vídeo/erro/progresso herdado do card
+        // original, e com os próprios controles de tradução resetados
+        // (senão herdaria o mesmo idioma marcado e ficaria em loop).
+        gerando: false,
+        erro: null,
+        videoUrl: null,
+        progressoPct: null,
+        progressoMensagem: null,
+        gerandoDuplo: false,
+        erroDuplo: null,
+        videoUrlVertical: null,
+        videoUrlQuadrado: null,
+        progressoDuploPct: null,
+        progressoDuploMensagem: null,
+        idiomaTraducao: "",
+        idiomaTraducaoCustom: "",
+        traduzindo: false,
+        erroTraducao: null,
+      };
+
+      setCards((prev) => {
+        const copia = [...prev];
+        copia[idx] = { ...copia[idx], traduzindo: false };
+        copia.splice(idx + 1, 0, novoCard);
+        return copia;
+      });
+    } catch (err) {
+      atualizarCard(idx, { traduzindo: false, erroTraducao: err instanceof Error ? err.message : String(err) });
     }
   }
 
@@ -1455,6 +1537,50 @@ export default function VariacoesPage() {
                   </div>
                 </div>
               )}
+
+              <div className="mt-4 flex flex-col gap-2 rounded-md border border-dashed border-zinc-300 p-3 sm:flex-row sm:items-end">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-zinc-500">
+                    Traduzir criativo (áudio + título/selo/CTA)
+                  </label>
+                  <select
+                    value={card.idiomaTraducao}
+                    onChange={(e) => atualizarCard(idx, { idiomaTraducao: e.target.value })}
+                    className="mt-1 w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm"
+                  >
+                    <option value="">Escolha o idioma...</option>
+                    {IDIOMAS_TRADUCAO.map((idioma) => (
+                      <option key={idioma} value={idioma}>
+                        {idioma}
+                      </option>
+                    ))}
+                    <option value="outro">Outro...</option>
+                  </select>
+                </div>
+                {card.idiomaTraducao === "outro" && (
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-zinc-500">Qual idioma?</label>
+                    <input
+                      value={card.idiomaTraducaoCustom}
+                      onChange={(e) => atualizarCard(idx, { idiomaTraducaoCustom: e.target.value })}
+                      placeholder="ex: espanhol da Argentina"
+                      className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                    />
+                  </div>
+                )}
+                <button
+                  onClick={() => traduzirCard(idx)}
+                  disabled={
+                    card.traduzindo ||
+                    !card.idiomaTraducao ||
+                    (card.idiomaTraducao === "outro" && !card.idiomaTraducaoCustom.trim())
+                  }
+                  className="rounded-md border border-brand px-4 py-2 text-sm font-medium text-brand disabled:opacity-40"
+                >
+                  {card.traduzindo ? "Traduzindo..." : "Traduzir (cria nova variação)"}
+                </button>
+              </div>
+              {card.erroTraducao && <p className="mt-2 text-sm text-red-700">{card.erroTraducao}</p>}
 
               <div className="mt-4 flex flex-col gap-2 sm:flex-row">
                 <button

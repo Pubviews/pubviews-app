@@ -78,6 +78,21 @@ function normalizarTexto(t: string): string {
 }
 
 /**
+ * Normaliza um domínio pra comparação (sem protocolo, sem "www.", sem
+ * caminho/barra final, minúsculo) — tanto o site digitado pelo usuário
+ * quanto o que vem no ad_creative_link_captions da Meta podem ter variações
+ * de formatação (ex: "https://www.flowquest.com/", "FLOWQUEST.COM").
+ */
+function normalizarDominio(valor: string): string {
+  return valor
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "");
+}
+
+/**
  * Entre todos os anúncios ativos encontrados na busca (não só os de páginas
  * CANDIDATO), conta quantas vezes cada Texto Principal/Título/Descrição
  * exato se repete — o mesmo raciocínio de "duplicação = sinal de que já
@@ -264,6 +279,111 @@ export interface BuscaGarimpoAmpliada {
   // Entre os termosTentados, os que realmente trouxeram algum anúncio a mais
   // — é o que vale mostrar pro usuário como "também buscamos por".
   termosComResultado: string[];
+  // Ranking por nicho (só preenchido quando a busca incluiu um "site") — ver
+  // montarRankingDeNichos.
+  nichos: NichoResumo[];
+}
+
+export interface NichoResumo {
+  nicho: string;
+  // Quantas páginas distintas (do site buscado) estão rodando esse nicho.
+  paginas: number;
+  total_active_ads: number;
+  max_days_active: number;
+  // O melhor status ("mais forte") entre as páginas desse nicho — é o sinal
+  // de "esse nicho tem algo muito duplicado e rodando há vários dias".
+  melhor_status: GarimpoResult["status"];
+  paginas_detalhe: { page_id: string; page_name: string; status: GarimpoResult["status"]; total_active_ads: number; max_days_active: number }[];
+}
+
+const ORDEM_STATUS: Record<GarimpoResult["status"], number> = {
+  "CANDIDATO FORTE": 0,
+  CANDIDATO: 1,
+  DESCARTAR: 2,
+};
+
+/**
+ * Agrupa os resultados por página (já calculados em montarResultadoGarimpo)
+ * em nichos — usado quando a busca do Garimpo é por um site específico, que
+ * pode estar rodando VÁRIOS nichos/ofertas diferentes ao mesmo tempo (comum
+ * em domínio de rastreamento compartilhado por várias campanhas). Como a
+ * Meta não devolve nicho nenhum pronto, a IA (Gemini) classifica cada página
+ * a partir de uma amostra do texto dos próprios anúncios — UMA chamada só
+ * pra todas as páginas do lote, não uma por página. Mostra TODOS os nichos
+ * encontrados (não só o melhor), ordenados com o de sinal mais forte
+ * primeiro (página CANDIDATO FORTE = muito duplicado + rodando há muitos
+ * dias). Se a IA falhar, cai tudo num nicho único "Outro" — nunca derruba a
+ * busca em si.
+ */
+async function montarRankingDeNichos(
+  allAds: AdLibraryAd[],
+  resultadosPorPagina: GarimpoResult[]
+): Promise<NichoResumo[]> {
+  if (resultadosPorPagina.length === 0) return [];
+
+  const textosPorPagina = new Map<string, string[]>();
+  for (const ad of allAds) {
+    const textos = [
+      ...(ad.ad_creative_bodies ?? []),
+      ...(ad.ad_creative_link_titles ?? []),
+      ...(ad.ad_creative_link_descriptions ?? []),
+    ].filter(Boolean);
+    if (textos.length === 0) continue;
+    const atual = textosPorPagina.get(ad.page_id) ?? [];
+    atual.push(...textos);
+    textosPorPagina.set(ad.page_id, atual);
+  }
+
+  let nichoPorPagina: Record<string, string> = {};
+  try {
+    // Import feito aqui dentro (não no topo do arquivo), mesmo motivo do
+    // import de sugerirTermosRelacionados mais abaixo.
+    const { classificarNichosDosAnuncios } = await import("./gemini");
+    nichoPorPagina = await classificarNichosDosAnuncios(
+      resultadosPorPagina.map((r) => ({
+        page_id: r.page_id,
+        page_name: r.page_name,
+        textos: textosPorPagina.get(r.page_id) ?? [],
+      }))
+    );
+  } catch {
+    nichoPorPagina = {}; // cai no fallback "Outro" abaixo pra todas as páginas
+  }
+
+  const porNicho = new Map<string, GarimpoResult[]>();
+  for (const r of resultadosPorPagina) {
+    const nicho = nichoPorPagina[r.page_id] || "Outro";
+    const lista = porNicho.get(nicho) ?? [];
+    lista.push(r);
+    porNicho.set(nicho, lista);
+  }
+
+  const ranking: NichoResumo[] = Array.from(porNicho.entries()).map(([nicho, paginas]) => ({
+    nicho,
+    paginas: paginas.length,
+    total_active_ads: paginas.reduce((soma, p) => soma + p.total_active_ads, 0),
+    max_days_active: Math.max(...paginas.map((p) => p.max_days_active), 0),
+    melhor_status: paginas.reduce(
+      (melhor, p) => (ORDEM_STATUS[p.status] < ORDEM_STATUS[melhor] ? p.status : melhor),
+      paginas[0].status
+    ),
+    paginas_detalhe: paginas.map((p) => ({
+      page_id: p.page_id,
+      page_name: p.page_name,
+      status: p.status,
+      total_active_ads: p.total_active_ads,
+      max_days_active: p.max_days_active,
+    })),
+  }));
+
+  ranking.sort((a, b) => {
+    if (ORDEM_STATUS[a.melhor_status] !== ORDEM_STATUS[b.melhor_status]) {
+      return ORDEM_STATUS[a.melhor_status] - ORDEM_STATUS[b.melhor_status];
+    }
+    return b.total_active_ads - a.total_active_ads;
+  });
+
+  return ranking;
 }
 
 /**
@@ -274,24 +394,47 @@ export interface BuscaGarimpoAmpliada {
  * Um termo extra falhar (Meta API ou IA fora do ar) nunca derruba a busca
  * inteira: o resultado do termo original sempre é devolvido, na pior das
  * hipóteses sem a ampliação.
+ *
+ * `site`: opcional — domínio (ex: "flowquest.com") pra restringir o
+ * resultado só aos anúncios que mostram esse site (via
+ * ad_creative_link_captions). Pode vir sozinho (busca "tudo que esse site
+ * roda", usando o próprio domínio como palavra-chave pra Meta, best-effort)
+ * ou junto com searchTerms (busca o nicho normalmente e filtra o resultado
+ * só pras páginas desse site). Quando presente, monta também o ranking por
+ * nicho (ver montarRankingDeNichos) — só nesse caso, pra não gastar uma
+ * chamada de IA extra em toda busca comum por palavra-chave.
  */
 export async function searchAdLibrary(params: {
-  searchTerms: string;
+  searchTerms?: string;
+  site?: string;
   countries: string[];
   limit?: number;
   ampliar?: boolean;
 }): Promise<BuscaGarimpoAmpliada> {
+  const searchTerms = params.searchTerms?.trim() || undefined;
+  const site = params.site?.trim() || undefined;
+  if (!searchTerms && !site) {
+    throw new Error("Informe um termo de busca ou um site.");
+  }
+  // Sem palavra-chave de nicho, usa o próprio domínio como termo de busca pra
+  // Meta (best-effort — a API não tem um parâmetro oficial de "buscar por
+  // domínio"); o filtro por site logo abaixo garante precisão de qualquer
+  // forma, mesmo que essa busca inicial traga ruído.
+  const termoParaMeta = searchTerms || site!;
+
   const adsOriginal = await buscarAnunciosAtivos({
-    searchTerms: params.searchTerms,
+    searchTerms: termoParaMeta,
     countries: params.countries,
     limit: params.limit,
   });
 
-  const adsPorTermo = new Map<string, AdLibraryAd[]>([[params.searchTerms, adsOriginal]]);
+  const adsPorTermo = new Map<string, AdLibraryAd[]>([[termoParaMeta, adsOriginal]]);
   let termosTentados: string[] = [];
 
   const paginasDistintas = new Set(adsOriginal.map((a) => a.page_id)).size;
-  const devePermitirAmpliar = params.ampliar !== false;
+  // Ampliação com termos parecidos só faz sentido pra busca por
+  // palavra-chave de nicho — um domínio não tem "sinônimo".
+  const devePermitirAmpliar = params.ampliar !== false && !!searchTerms;
 
   if (devePermitirAmpliar && paginasDistintas < LIMIAR_PARA_AMPLIAR) {
     let termosSugeridos: string[] = [];
@@ -300,7 +443,7 @@ export async function searchAdLibrary(params: {
       // módulo (integração com a Meta) sem depender do módulo do Gemini a
       // menos que a ampliação realmente seja usada.
       const { sugerirTermosRelacionados } = await import("./gemini");
-      termosSugeridos = await sugerirTermosRelacionados(params.searchTerms, MAX_TERMOS_EXTRAS);
+      termosSugeridos = await sugerirTermosRelacionados(searchTerms!, MAX_TERMOS_EXTRAS);
     } catch {
       termosSugeridos = []; // IA fora do ar — segue só com o termo original
     }
@@ -322,15 +465,32 @@ export async function searchAdLibrary(params: {
   for (const ads of adsPorTermo.values()) {
     for (const ad of ads) todosOsAdsPorId.set(ad.id, ad);
   }
+  let todosOsAds = Array.from(todosOsAdsPorId.values());
+
+  // Filtro por site: mantém só os anúncios cujo domínio mostrado bate com o
+  // pedido — necessário mesmo quando a busca original já usou o domínio como
+  // palavra-chave, porque a busca por texto da Meta pode trazer "parecidos"
+  // que não são de fato desse site.
+  if (site) {
+    const siteNormalizado = normalizarDominio(site);
+    todosOsAds = todosOsAds.filter((ad) =>
+      (ad.ad_creative_link_captions ?? []).some((c) => {
+        const dominio = normalizarDominio(c);
+        return !!dominio && (dominio === siteNormalizado || dominio.includes(siteNormalizado) || siteNormalizado.includes(dominio));
+      })
+    );
+  }
 
   const termosComResultado = termosTentados.filter((termo) => (adsPorTermo.get(termo)?.length ?? 0) > 0);
-  const busca = montarResultadoGarimpo(Array.from(todosOsAdsPorId.values()));
+  const busca = montarResultadoGarimpo(todosOsAds);
+  const nichos = site ? await montarRankingDeNichos(todosOsAds, busca.resultados) : [];
 
   return {
     ...busca,
-    termoOriginal: params.searchTerms,
+    termoOriginal: searchTerms || site!,
     termosTentados,
     termosComResultado,
+    nichos,
   };
 }
 

@@ -21,6 +21,21 @@ interface MelhorTexto {
   paginas: string[];
 }
 
+interface NichoResumo {
+  nicho: string;
+  paginas: number;
+  total_active_ads: number;
+  max_days_active: number;
+  melhor_status: "CANDIDATO FORTE" | "CANDIDATO" | "DESCARTAR";
+  paginas_detalhe: {
+    page_id: string;
+    page_name: string;
+    status: "CANDIDATO FORTE" | "CANDIDATO" | "DESCARTAR";
+    total_active_ads: number;
+    max_days_active: number;
+  }[];
+}
+
 const STATUS_STYLE: Record<string, string> = {
   "CANDIDATO FORTE": "bg-emerald-100 text-emerald-800",
   CANDIDATO: "bg-amber-100 text-amber-800",
@@ -136,6 +151,66 @@ function CartaoDeTexto({
   );
 }
 
+/**
+ * Uma linha do ranking de nichos (só aparece quando a busca inclui um site
+ * — ver GarimpoConteudo) — mostra o resumo do nicho e, ao expandir, todas as
+ * páginas desse site que rodam esse nicho (com o status individual de cada
+ * uma, o mesmo critério de "muito duplicado + rodando há muitos dias" da
+ * tabela principal).
+ */
+function LinhaDeNicho({ item }: { item: NichoResumo }) {
+  const [aberto, setAberto] = useState(false);
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white">
+      <button
+        onClick={() => setAberto((a) => !a)}
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+      >
+        <div className="flex items-center gap-3">
+          <span className={`rounded-full px-2 py-1 text-xs font-medium ${STATUS_STYLE[item.melhor_status]}`}>
+            {item.melhor_status}
+          </span>
+          <span className="text-sm font-medium text-zinc-800">{item.nicho}</span>
+        </div>
+        <div className="flex items-center gap-4 text-xs text-zinc-500">
+          <span>{item.paginas} página{item.paginas === 1 ? "" : "s"}</span>
+          <span>{item.total_active_ads} anúncio{item.total_active_ads === 1 ? "" : "s"} ativo{item.total_active_ads === 1 ? "" : "s"}</span>
+          <span>até {item.max_days_active} dias no ar</span>
+          <span className="text-zinc-400">{aberto ? "▲" : "▼"}</span>
+        </div>
+      </button>
+      {aberto && (
+        <div className="border-t border-zinc-100 px-4 py-3">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-left text-zinc-400">
+                <th className="pb-2 pr-3">Página</th>
+                <th className="pb-2 pr-3">Anúncios ativos</th>
+                <th className="pb-2 pr-3">Dias ativo (máx.)</th>
+                <th className="pb-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {item.paginas_detalhe.map((p) => (
+                <tr key={p.page_id} className="border-t border-zinc-50">
+                  <td className="py-2 pr-3 font-medium text-zinc-700">{p.page_name}</td>
+                  <td className="py-2 pr-3 text-zinc-600">{p.total_active_ads}</td>
+                  <td className="py-2 pr-3 text-zinc-600">{p.max_days_active}</td>
+                  <td className="py-2">
+                    <span className={`rounded-full px-2 py-1 text-[10px] font-medium ${STATUS_STYLE[p.status]}`}>
+                      {p.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ListaDeTextos({
   titulo,
   itens,
@@ -167,6 +242,10 @@ function GarimpoConteudo() {
   const termoInicial = searchParams.get("termo") || "";
 
   const [searchTerms, setSearchTerms] = useState(termoInicial);
+  // Site/domínio opcional (ex: "flowquest.com") — pode ser usado sozinho
+  // (busca tudo que esse site roda, agrupado por nicho) ou junto com o termo
+  // de busca acima (filtra o nicho buscado só pras páginas desse site).
+  const [site, setSite] = useState("");
   const [countries, setCountries] = useState("US");
   const [ampliar, setAmpliar] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -177,10 +256,11 @@ function GarimpoConteudo() {
   const [melhoresDescricoes, setMelhoresDescricoes] = useState<MelhorTexto[]>([]);
   const [termosComResultado, setTermosComResultado] = useState<string[]>([]);
   const [termosTentados, setTermosTentados] = useState<string[]>([]);
+  const [nichos, setNichos] = useState<NichoResumo[]>([]);
 
   async function buscar(termoParaBuscar?: string) {
     const termo = termoParaBuscar ?? searchTerms;
-    if (!termo) return;
+    if (!termo && !site) return;
     setLoading(true);
     setError(null);
     setResultados(null);
@@ -189,12 +269,14 @@ function GarimpoConteudo() {
     setMelhoresDescricoes([]);
     setTermosComResultado([]);
     setTermosTentados([]);
+    setNichos([]);
     try {
       const res = await fetch("/api/garimpo", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          searchTerms: termo,
+          searchTerms: termo || undefined,
+          site: site.trim() || undefined,
           countries: countries
             .split(",")
             .map((c) => c.trim().toUpperCase())
@@ -210,6 +292,7 @@ function GarimpoConteudo() {
       setMelhoresDescricoes(json.melhoresDescricoes || []);
       setTermosComResultado(json.termosComResultado || []);
       setTermosTentados(json.termosTentados || []);
+      setNichos(json.nichos || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -240,7 +323,7 @@ function GarimpoConteudo() {
 
       <div className="mt-6 flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-6 sm:flex-row sm:items-end">
         <div className="flex-1">
-          <label className="block text-sm font-medium text-zinc-700">Termo de busca</label>
+          <label className="block text-sm font-medium text-zinc-700">Termo de busca (opcional se preencher o site)</label>
           <input
             value={searchTerms}
             onChange={(e) => setSearchTerms(e.target.value)}
@@ -248,8 +331,17 @@ function GarimpoConteudo() {
             className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
           />
         </div>
-        <div className="sm:w-56">
-          <label className="block text-sm font-medium text-zinc-700">Países (separados por vírgula)</label>
+        <div className="flex-1">
+          <label className="block text-sm font-medium text-zinc-700">Site (opcional)</label>
+          <input
+            value={site}
+            onChange={(e) => setSite(e.target.value)}
+            placeholder="ex: flowquest.com"
+            className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
+          />
+        </div>
+        <div className="sm:w-44">
+          <label className="block text-sm font-medium text-zinc-700">Países (vírgula)</label>
           <input
             value={countries}
             onChange={(e) => setCountries(e.target.value)}
@@ -259,12 +351,18 @@ function GarimpoConteudo() {
         </div>
         <button
           onClick={() => buscar()}
-          disabled={loading || !searchTerms}
+          disabled={loading || (!searchTerms && !site)}
           className="rounded-md bg-brand px-5 py-2 text-sm font-medium text-white disabled:opacity-40"
         >
           {loading ? "Buscando..." : "Buscar"}
         </button>
       </div>
+      {site && (
+        <p className="mt-2 text-xs text-zinc-500">
+          Com um site preenchido, a busca também agrupa os resultados por nicho (o site pode estar rodando mais de
+          um ao mesmo tempo) — veja a seção &quot;Nichos encontrados nesse site&quot; abaixo da tabela.
+        </p>
+      )}
 
       <label className="mt-3 flex items-center gap-2 text-sm text-zinc-600">
         <input
@@ -349,6 +447,26 @@ function GarimpoConteudo() {
         </div>
       )}
 
+      {resultados && site && (
+        <div className="mt-8">
+          <h2 className="text-lg font-semibold tracking-tight">Nichos encontrados nesse site</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Todos os nichos que <strong>{site}</strong> está rodando nessa busca — o(s) marcado(s) como CANDIDATO
+            FORTE tem alguma página muito duplicada (3+ anúncios simultâneos) e rodando há 30+ dias, o sinal mais
+            forte de que já é um vencedor. Clique num nicho pra ver as páginas por trás dele.
+          </p>
+          {nichos.length === 0 ? (
+            <p className="mt-4 text-sm text-zinc-500">Nenhum anúncio ativo encontrado pra esse site.</p>
+          ) : (
+            <div className="mt-4 space-y-2">
+              {nichos.map((n) => (
+                <LinhaDeNicho key={n.nicho} item={n} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {resultados && resultados.length > 0 && (
         <div className="mt-8">
           <h2 className="text-lg font-semibold tracking-tight">Melhores textos do nicho</h2>
@@ -369,19 +487,19 @@ function GarimpoConteudo() {
               titulo={TIPO_TEXTO_ROTULO.texto_principal}
               itens={melhoresTextosPrincipais}
               tipo="texto_principal"
-              nicho={searchTerms}
+              nicho={searchTerms || site}
             />
             <ListaDeTextos
               titulo={TIPO_TEXTO_ROTULO.titulo}
               itens={melhoresTitulos}
               tipo="titulo"
-              nicho={searchTerms}
+              nicho={searchTerms || site}
             />
             <ListaDeTextos
               titulo={TIPO_TEXTO_ROTULO.descricao}
               itens={melhoresDescricoes}
               tipo="descricao"
-              nicho={searchTerms}
+              nicho={searchTerms || site}
             />
           </div>
         </div>

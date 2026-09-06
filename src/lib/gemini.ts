@@ -425,3 +425,141 @@ export async function sugerirTermosDeBusca(descricao: string): Promise<string> {
   const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? descricao;
   return raw.trim().replace(/["\n]/g, "");
 }
+
+export interface PaginaParaClassificar {
+  page_id: string;
+  page_name: string;
+  // Amostra do texto (Texto Principal/Título/Descrição) dos anúncios ativos
+  // dessa página — usada só como pista pra IA identificar o nicho, não
+  // precisa ser tudo.
+  textos: string[];
+}
+
+/**
+ * Classifica um lote de páginas (cada uma com uma amostra do texto dos
+ * anúncios ativos dela) em nichos curtos — usado pelo Garimpo quando a busca
+ * é por um site específico, que pode estar rodando vários nichos/ofertas
+ * diferentes ao mesmo tempo. Uma chamada só pra IA cobre o lote inteiro (não
+ * uma por página), devolvendo um mapa page_id -> nicho. Nunca lança: se a IA
+ * falhar ou devolver algo que não dá pra interpretar, devolve um mapa vazio
+ * (quem chama já trata isso caindo num nicho "Outro").
+ */
+export async function classificarNichosDosAnuncios(
+  paginas: PaginaParaClassificar[]
+): Promise<Record<string, string>> {
+  if (paginas.length === 0) return {};
+
+  const resumo = paginas.map((p) => ({
+    page_id: p.page_id,
+    page_name: p.page_name,
+    amostra: p.textos.filter(Boolean).slice(0, 3).join(" | ").slice(0, 400),
+  }));
+
+  try {
+    const json = await callGemini(TEXT_MODEL, {
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text:
+                `Você é um analista de marketing digital (media buying/afiliados). Abaixo está uma lista de páginas do Facebook Ads e uma amostra do texto dos anúncios ativos de cada uma.\n\n` +
+                `Pra CADA página da lista, identifique em uma frase bem curta (2 a 5 palavras, em português) qual é o NICHO/oferta do anúncio (ex: "curso de empilhadeira", "app de streaming de futebol", "emagrecimento", "crédito consignado", "curso de inglês"). Use nichos consistentes: se duas páginas parecem vender a mesma coisa, use exatamente o mesmo rótulo pras duas (mesma grafia, sem variar maiúscula/plural). Se não der pra saber pelo texto (amostra vazia ou sem sentido), responda "Outro".\n\n` +
+                `Páginas:\n${JSON.stringify(resumo)}\n\n` +
+                `Responda em JSON puro, um array com uma entrada por página, na mesma ordem recebida, no formato [{"page_id":"...","nicho":"..."}]. Nada além do array JSON.`,
+            },
+          ],
+        },
+      ],
+      generationConfig: { temperature: 0.2 },
+    });
+
+    const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "[]";
+    const cleaned = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "");
+    const parsed = JSON.parse(cleaned);
+    if (!Array.isArray(parsed)) return {};
+
+    const resultado: Record<string, string> = {};
+    for (const item of parsed) {
+      if (item && typeof item.page_id === "string" && typeof item.nicho === "string" && item.nicho.trim()) {
+        resultado[item.page_id] = item.nicho.trim();
+      }
+    }
+    return resultado;
+  } catch {
+    return {};
+  }
+}
+
+export interface CriativoTraduzido {
+  texto: string;
+  textoOverlay?: string;
+  tituloTopo?: string;
+  seloTexto?: string;
+}
+
+/**
+ * Traduz o roteiro de narração e os elementos de texto do vídeo (CTA,
+ * título, selo) pra um idioma alvo, preservando o tom publicitário e o
+ * ESTILO DE MAIÚSCULAS de cada campo original (ex: título/CTA em caixa alta
+ * continuam em caixa alta na tradução). Cada campo é opcional na entrada — só
+ * volta no resultado se tiver sido enviado (os demais ficam undefined).
+ */
+export async function traduzirCriativo(params: {
+  texto: string;
+  textoOverlay?: string;
+  tituloTopo?: string;
+  seloTexto?: string;
+  idioma: string;
+}): Promise<CriativoTraduzido> {
+  const campos: Record<string, string> = { texto: params.texto };
+  if (params.textoOverlay) campos.textoOverlay = params.textoOverlay;
+  if (params.tituloTopo) campos.tituloTopo = params.tituloTopo;
+  if (params.seloTexto) campos.seloTexto = params.seloTexto;
+
+  const json = await callGemini(TEXT_MODEL, {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              `Traduza os campos de texto de um anúncio em vídeo (Meta Ads) para ${params.idioma}.\n\n` +
+              `Regras:\n` +
+              `- Mantenha o mesmo tom publicitário/persuasivo e o mesmo tamanho aproximado de cada frase (não alongue nem resuma demais).\n` +
+              `- Preserve o ESTILO DE MAIÚSCULAS de cada campo original: se o original está todo em caixa alta, a tradução também deve ficar em caixa alta; se é frase normal, mantenha frase normal.\n` +
+              `- Não adicione aspas, markdown, emojis que não existiam no original, nem nenhuma explicação.\n\n` +
+              `Campos a traduzir (JSON):\n${JSON.stringify(campos)}\n\n` +
+              `Responda em JSON puro, com EXATAMENTE as mesmas chaves recebidas, valores já traduzidos. Nada além do objeto JSON.`,
+          },
+        ],
+      },
+    ],
+    generationConfig: { temperature: 0.4 },
+  });
+
+  const raw: string = json.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
+  const cleaned = raw.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "");
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    throw new Error("A IA não devolveu uma tradução em formato reconhecível. Tente de novo.");
+  }
+
+  const textoTraduzido = typeof parsed.texto === "string" && parsed.texto.trim() ? parsed.texto.trim() : params.texto;
+  const resultado: CriativoTraduzido = { texto: textoTraduzido };
+  if (campos.textoOverlay) {
+    resultado.textoOverlay =
+      typeof parsed.textoOverlay === "string" && parsed.textoOverlay.trim() ? parsed.textoOverlay.trim() : params.textoOverlay;
+  }
+  if (campos.tituloTopo) {
+    resultado.tituloTopo =
+      typeof parsed.tituloTopo === "string" && parsed.tituloTopo.trim() ? parsed.tituloTopo.trim() : params.tituloTopo;
+  }
+  if (campos.seloTexto) {
+    resultado.seloTexto =
+      typeof parsed.seloTexto === "string" && parsed.seloTexto.trim() ? parsed.seloTexto.trim() : params.seloTexto;
+  }
+  return resultado;
+}
