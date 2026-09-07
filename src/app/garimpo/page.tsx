@@ -359,7 +359,7 @@ function GarimpoConteudo() {
           <input
             value={pageIds}
             onChange={(e) => setPageIds(e.target.value)}
-            placeholder="ex: 123456789012345"
+            placeholder="ex: 123456789012345 ou o link do anúncio"
             className="mt-1 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm"
           />
         </div>
@@ -383,7 +383,9 @@ function GarimpoConteudo() {
       <p className="mt-2 text-xs text-zinc-500">
         A Ad Library da Meta não tem busca direta por domínio — sem nenhum termo nem ID de página, a gente tenta
         adivinhar um termo a partir do próprio conteúdo do site (pode não achar tudo). Pra garantir 100% do que uma
-        página roda, cole o ID dela (abra{" "}
+        página roda, cole o ID dela. Jeito mais fácil de achar: abra a página da marca no Facebook → aba
+        &quot;Sobre&quot; → &quot;Transparência da página&quot; — o ID aparece lá direto. Também dá pra colar o
+        link de um anúncio específico (
         <a
           href="https://www.facebook.com/ads/library/"
           target="_blank"
@@ -392,8 +394,9 @@ function GarimpoConteudo() {
         >
           facebook.com/ads/library
         </a>
-        , busque o nome da marca e copie o ID da URL do anúncio/página). Deixe &quot;Países&quot; em branco pra
-        buscar numa lista ampla de mercados de uma vez (a API exige pelo menos um país — não existe busca mundial).
+        ) que a gente identifica automaticamente a página por trás — não precisa se preocupar em pegar o ID do
+        anúncio em vez do ID da página. Deixe &quot;Países&quot; em branco pra buscar numa lista ampla de mercados
+        de uma vez (a API exige pelo menos um país — não existe busca mundial).
       </p>
       {site && (
         <p className="mt-1 text-xs text-zinc-500">

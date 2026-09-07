@@ -271,6 +271,59 @@ export async function buscarAnunciosAtivosPorPageIds(
 }
 
 /**
+ * A partir de uma entrada colada pelo usuário no campo "ID(s) da página",
+ * extrai um ID numérico bruto — aceita tanto o ID puro (ex: "61585821656375")
+ * quanto uma URL inteira da Ad Library colada por engano (usa
+ * extrairIdsDoLink, preferindo o view_all_page_id se vier, senão o id do
+ * anúncio — que depois passa por resolverIdsDePagina abaixo pra virar o ID de
+ * página de verdade).
+ */
+function extrairIdBrutoDeEntradaDePagina(raw: string): string | null {
+  const valor = raw.trim();
+  if (!valor) return null;
+  if (/^\d+$/.test(valor)) return valor;
+  const { adId, pageId } = extrairIdsDoLink(valor);
+  return pageId || adId || null;
+}
+
+/**
+ * Resolve cada ID colado pelo usuário pro ID de PÁGINA de verdade — cobre o
+ * erro mais comum ao usar esse campo: colar o ID de um ANÚNCIO individual
+ * (que aparece muito mais fácil na tela, ao abrir o anúncio) em vez do ID da
+ * PÁGINA (que só aparece no link depois de abrir o anúncio, ou na aba
+ * "Transparência da página"). Colar um ID de anúncio em search_page_ids
+ * derruba a busca com "Invalid Page ID" (erro 2334021).
+ *
+ * Como o node "Archived Ad" da Graph API tem um campo page_id (que um node
+ * de Page de verdade não tem), dá pra descobrir e corrigir isso sozinho:
+ * busca cada ID direto na Graph API pedindo o campo page_id — se vier
+ * preenchido, era um ID de anúncio e a gente troca pelo page_id real; se a
+ * consulta falhar ou não vier page_id, assume que o ID já é de página mesmo
+ * (best-effort — nesse caso, se estiver errado mesmo assim, a própria busca
+ * por search_page_ids vai reclamar como antes).
+ */
+async function resolverIdsDePagina(ids: string[]): Promise<string[]> {
+  if (ids.length === 0) return [];
+  const token = env.metaAccessToken();
+  const resolvidos = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const url = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/${id}`);
+        url.searchParams.set("fields", "page_id");
+        url.searchParams.set("access_token", token);
+        const res = await fetch(url.toString());
+        if (!res.ok) return id;
+        const json: { page_id?: string } = await res.json();
+        return json.page_id && /^\d+$/.test(json.page_id) ? json.page_id : id;
+      } catch {
+        return id;
+      }
+    })
+  );
+  return Array.from(new Set(resolvidos));
+}
+
+/**
  * Agrupa por página um conjunto de anúncios já buscados (ver
  * buscarAnunciosAtivos) e aplica os critérios: ativo há 30+ dias e 3+
  * anúncios simultâneos da mesma página. Separada da busca em si pra poder
@@ -530,9 +583,17 @@ export async function searchAdLibrary(params: {
 }): Promise<BuscaGarimpoAmpliada> {
   const searchTerms = params.searchTerms?.trim() || undefined;
   const site = params.site?.trim() || undefined;
-  const pageIds = Array.from(
-    new Set((params.pageIds ?? []).map((p) => p.trim()).filter((p) => /^\d+$/.test(p)))
+  // Aceita ID puro ou URL inteira colada por engano (extrairIdBrutoDeEntradaDePagina)
+  // e depois resolve qualquer ID de ANÚNCIO colado por engano pro ID de
+  // PÁGINA de verdade (resolverIdsDePagina) — ver comentário da função.
+  const idsBrutos = Array.from(
+    new Set(
+      (params.pageIds ?? [])
+        .map((p) => extrairIdBrutoDeEntradaDePagina(p))
+        .filter((p): p is string => !!p)
+    )
   );
+  const pageIds = idsBrutos.length > 0 ? await resolverIdsDePagina(idsBrutos) : [];
 
   if (!searchTerms && !site && pageIds.length === 0) {
     throw new Error("Informe um termo de busca, um site ou um ID de página.");
